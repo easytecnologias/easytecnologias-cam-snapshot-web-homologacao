@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css?v=275">
+  <link rel="stylesheet" href="styles.css?v=277">
 </head>
 <body>
 
@@ -3739,36 +3739,48 @@
                   </div>
                 </div>
                 </div>
-                <p style="font-size:11px;color:var(--amber);margin:2px 0 10px;display:flex;align-items:center;gap:5px">
-                  <i data-lucide="alert-triangle" style="width:13px;height:13px;flex-shrink:0"></i>
-                  Autorizar grava configuracao real na OLT (equipamento em producao).
-                </p>
-                <div class="deploy-inline-button">
-                  <button class="primary-action" id="btnOnuAdd" type="button"><i data-lucide="wifi"></i> Autorizar ONU</button>
-                </div>
-                <div id="onuAddResult" class="deploy-result-box">Nenhuma ONU autorizada ainda nesta sessao.</div>
                 <div id="onuAddFieldsEpon" class="hidden">
                   <div class="form-row">
-                    <label>MAC da ONU
-                      <input type="text" id="onuAddMacEpon" placeholder="aa:bb:cc:dd:ee:ff">
-                    </label>
-                    <label>Descricao
-                      <input type="text" id="onuAddDescriptionEpon" placeholder="Ex: Camera-Portaria">
-                    </label>
-                  </div>
-                  <div id="onuAddPortRowsEpon">
-                    <div class="onu-service-row-epon form-row">
-                      <label>Porta ethernet
-                        <input type="number" min="1" value="1" class="onu-eth-port-epon">
+                    <div class="form-group">
+                      <label>MAC da ONU
+                        <input type="text" id="onuAddMacEpon" placeholder="aa:bb:cc:dd:ee:ff">
                       </label>
-                      <label>VLAN
-                        <input type="number" min="1" class="onu-eth-vlan-epon">
+                    </div>
+                    <div class="form-group">
+                      <label>Descricao
+                        <input type="text" id="onuAddDescriptionEpon" placeholder="Ex: Camera-Portaria">
                       </label>
                     </div>
                   </div>
-                  <button type="button" id="btnOnuAddPortRowEpon" class="secondary-action"><i data-lucide="plus"></i> Adicionar porta</button>
-                  <p class="hint">A ONU sai liberada pra transmitir (camera) automaticamente ao autorizar.</p>
+                  <div id="onuAddPortRowsEpon">
+                    <div class="onu-service-row-epon form-row">
+                      <div class="form-group">
+                        <label>Porta ethernet
+                          <input type="number" min="1" value="1" class="onu-eth-port-epon">
+                        </label>
+                      </div>
+                      <div class="form-group">
+                        <label>VLAN
+                          <div style="display:flex;gap:6px;align-items:stretch">
+                            <input type="number" min="1" class="onu-eth-vlan-epon" style="flex:1">
+                            <button type="button" id="btnOnuAddPortRowEpon" class="secondary-action" style="white-space:nowrap;flex-shrink:0;min-height:40px"><i data-lucide="plus"></i> Adicionar</button>
+                          </div>
+                        </label>
+                      </div>
+                    </div>
+                  </div>
                 </div>
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin:2px 0 10px;flex-wrap:wrap">
+                  <div>
+                    <p class="hint hidden" id="onuAddHintEpon" style="margin:0 0 6px">A ONU sai liberada pra transmitir (camera) automaticamente ao autorizar.</p>
+                    <p style="font-size:11px;color:var(--amber);margin:0;display:flex;align-items:center;gap:5px">
+                      <i data-lucide="alert-triangle" style="width:13px;height:13px;flex-shrink:0"></i>
+                      Autorizar grava configuracao real na OLT (equipamento em producao).
+                    </p>
+                  </div>
+                  <button class="primary-action" id="btnOnuAdd" type="button"><i data-lucide="wifi"></i> Autorizar ONU</button>
+                </div>
+                <div id="onuAddResult" class="deploy-result-box">Nenhuma ONU autorizada ainda nesta sessao.</div>
               </div>
             </details>
 
@@ -3795,18 +3807,25 @@
                     <input id="onuQuerySerial" placeholder="VSOL00181583">
                   </div>
                 </div>
-                <div class="deploy-inline-button" style="margin:2px 0 10px">
-                  <button class="secondary-action" id="btnOnuQuery" type="button"><i data-lucide="activity"></i> Consultar sinal / MACs</button>
+                <div id="onuQueryFieldsEpon" class="hidden form-row" style="grid-template-columns:1fr 1fr auto;align-items:end">
+                  <div class="form-group">
+                    <label>PON
+                      <select id="onuQueryPonEpon"></select>
+                    </label>
+                  </div>
+                  <div class="form-group">
+                    <label>ONU (posicao)
+                      <input type="number" min="1" id="onuQueryOnuNumEpon">
+                    </label>
+                  </div>
+                  <div class="form-group" id="onuQueryBtnSlotEpon">
+                    <label style="visibility:hidden">.</label>
+                  </div>
+                </div>
+                <div class="deploy-inline-button" id="onuQueryBtnWrapGpon" style="margin:2px 0 10px">
+                  <button class="secondary-action" id="btnOnuQuery" type="button" style="padding:9px 16px;white-space:nowrap"><i data-lucide="activity"></i> Consultar sinal / MACs</button>
                 </div>
                 <div id="onuQueryResult" class="deploy-result-box">Informe a posicao (PON + numero) ou o serial e clique em Consultar.</div>
-                <div id="onuQueryFieldsEpon" class="hidden form-row">
-                  <label>PON
-                    <select id="onuQueryPonEpon"></select>
-                  </label>
-                  <label>ONU (posicao)
-                    <input type="number" min="1" id="onuQueryOnuNumEpon">
-                  </label>
-                </div>
               </div>
             </details>
 
@@ -3832,22 +3851,29 @@
                     <input id="onuRebootOnuNum" type="number" placeholder="Ex: 4">
                   </div>
                 </div>
+                <div id="onuRebootFieldsEpon" class="hidden form-row" style="grid-template-columns:1fr 1fr auto;align-items:end">
+                  <div class="form-group">
+                    <label>PON
+                      <select id="onuRebootPonEpon"></select>
+                    </label>
+                  </div>
+                  <div class="form-group">
+                    <label>ONU (posicao)
+                      <input type="number" min="1" id="onuRebootOnuNumEpon">
+                    </label>
+                  </div>
+                  <div class="form-group" id="onuRebootBtnSlotEpon">
+                    <label style="visibility:hidden">.</label>
+                  </div>
+                </div>
                 <p style="font-size:11px;color:var(--amber);margin:2px 0 10px;display:flex;align-items:center;gap:5px">
                   <i data-lucide="alert-triangle" style="width:13px;height:13px;flex-shrink:0"></i>
                   Equipamento vivo: a ONU fica sem servico por um tempo ate voltar a subir sozinha.
                 </p>
-                <div class="deploy-inline-button" style="margin:2px 0 10px">
-                  <button class="secondary-action" id="btnOnuReboot" type="button"><i data-lucide="power"></i> Reiniciar ONU</button>
+                <div class="deploy-inline-button" id="onuRebootBtnWrapGpon" style="margin:2px 0 10px">
+                  <button class="secondary-action" id="btnOnuReboot" type="button" style="padding:9px 16px;white-space:nowrap"><i data-lucide="power"></i> Reiniciar ONU</button>
                 </div>
                 <div id="onuRebootResult" class="deploy-result-box">Nenhum reinicio realizado nesta sessao.</div>
-                <div id="onuRebootFieldsEpon" class="hidden form-row">
-                  <label>PON
-                    <select id="onuRebootPonEpon"></select>
-                  </label>
-                  <label>ONU (posicao)
-                    <input type="number" min="1" id="onuRebootOnuNumEpon">
-                  </label>
-                </div>
               </div>
             </details>
 
@@ -3873,22 +3899,29 @@
                     <input id="onuDeleteOnuNum" type="number" placeholder="Ex: 4">
                   </div>
                 </div>
+                <div id="onuDeleteFieldsEpon" class="hidden form-row" style="grid-template-columns:1fr 1fr auto;align-items:end">
+                  <div class="form-group">
+                    <label>PON
+                      <select id="onuDeletePonEpon"></select>
+                    </label>
+                  </div>
+                  <div class="form-group">
+                    <label>ONU (posicao)
+                      <input type="number" min="1" id="onuDeleteOnuNumEpon">
+                    </label>
+                  </div>
+                  <div class="form-group" id="onuDeleteBtnSlotEpon">
+                    <label style="visibility:hidden">.</label>
+                  </div>
+                </div>
                 <p style="font-size:11px;color:var(--danger);margin:2px 0 10px;display:flex;align-items:center;gap:5px">
                   <i data-lucide="alert-triangle" style="width:13px;height:13px;flex-shrink:0"></i>
                   Acao destrutiva: remove o cadastro e desliga o servico dessa ONU.
                 </p>
-                <div class="deploy-inline-button">
-                  <button class="secondary-action" id="btnOnuDelete" type="button" style="border-color:var(--danger);color:var(--danger)"><i data-lucide="trash-2"></i> Excluir ONU</button>
+                <div class="deploy-inline-button" id="onuDeleteBtnWrapGpon">
+                  <button class="secondary-action" id="btnOnuDelete" type="button" style="border-color:var(--danger);color:var(--danger);padding:9px 16px;white-space:nowrap"><i data-lucide="trash-2"></i> Excluir ONU</button>
                 </div>
                 <div id="onuDeleteResult" class="deploy-result-box">Nenhuma exclusao realizada nesta sessao.</div>
-                <div id="onuDeleteFieldsEpon" class="hidden form-row">
-                  <label>PON
-                    <select id="onuDeletePonEpon"></select>
-                  </label>
-                  <label>ONU (posicao)
-                    <input type="number" min="1" id="onuDeleteOnuNumEpon">
-                  </label>
-                </div>
               </div>
             </details>
           </div>
@@ -6089,7 +6122,7 @@
   <script src="js/maintenance.js?v=146"></script>
   <script src="js/analysis.js?v=144"></script>
   <script src="js/network.js?v=158"></script>
-  <script src="js/deploy.js?v=177"></script>
+  <script src="js/deploy.js?v=184"></script>
   <script src="js/deployOlt.js?v=159"></script>
   <script src="js/connectors.js?v=161"></script>
   <script src="js/monitoring.js?v=9"></script>

@@ -1273,7 +1273,7 @@ def delete_onu(req: OltDeleteOnuRequest) -> Dict[str, Any]:
                     onu=req.onu,
                     timeout=req.timeout,
                 )
-            if result.get("ok") and not _is_intelbras_4840e(req):
+            if result.get("ok"):
                 result["inventory"] = _remove_onu_inventory(req)
             log_onu_action(
                 "delete_onu", olt_id=req.olt_id, olt_ip=req.olt_ip, site=req.site,
@@ -1330,6 +1330,8 @@ def onu_signal(req: OltOnuSignalRequest) -> Dict[str, Any]:
                     olt_ip=req.olt_ip, user=req.user, password=req.password,
                     pon=req.pon, onu=req.onu, timeout=req.timeout,
                 )
+                if result.get("ok"):
+                    _enrich_signal_macs_with_ips(result)
             else:
                 result = _onu_signal_8820i(
                     olt_ip=req.olt_ip,

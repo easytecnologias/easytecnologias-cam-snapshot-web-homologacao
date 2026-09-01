@@ -154,6 +154,13 @@ def test_find_onu_4840e_returns_none_when_not_found():
     check(result is None, f"esperava None, veio {result}")
 
 
+_MAC_TABLE_ONU_OUTPUT = """MAC Address        VLAN   ONU      Status
+aa:bb:cc:dd:ee:01  100    0/4/6    Active
+aa:bb:cc:dd:ee:02  100    0/4/6    Active
+Total: 2
+"""
+
+
 def test_onu_signal_4840e_combines_status_and_opm():
     def script(cmd, prompt):
         if cmd == "conf t":
@@ -164,6 +171,10 @@ def test_onu_signal_4840e_combines_status_and_opm():
             return "", "OLT_RADS(onu-0/4/6)#"
         if cmd == "show onu-opm-diagnosis":
             return _OPM_OUTPUT, prompt
+        if cmd == "interface pon 0/4":
+            return "", "OLT_RADS(config-if-pon-0/4)#"
+        if cmd == "show mac-address-table onu 0/4/6":
+            return _MAC_TABLE_ONU_OUTPUT, prompt
         if cmd == "exit":
             return "", "OLT_RADS(config)#"
         return "", prompt
@@ -179,6 +190,11 @@ def test_onu_signal_4840e_combines_status_and_opm():
     check(result["mac"] == "30:e1:f1:73:a7:19", f"mac errado: {result}")
     check(result["state"] == "Up", f"state errado: {result}")
     check(result["rx_power_dbm"] == -2.40, f"rx power errado: {result}")
+    check(len(result.get("macs") or []) == 2, f"esperava 2 MACs atras da ONU: {result.get('macs')}")
+    check(
+        {m["mac"] for m in result["macs"]} == {"aa:bb:cc:dd:ee:01", "aa:bb:cc:dd:ee:02"},
+        f"MACs errados: {result.get('macs')}",
+    )
 
 
 def test_connect_and_login_closes_on_ensure_logged_in_failure():

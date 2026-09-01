@@ -1680,9 +1680,13 @@ function onuApplyRegisteredOlt() {
   onuUpdatePonSelectors();
   onuUpdateServiceOptions();
   onuToggleEponFields('onuAddFieldsGpon', 'onuAddFieldsEpon');
-  onuToggleEponFields('onuQueryFieldsGpon', 'onuQueryFieldsEpon');
-  onuToggleEponFields('onuRebootFieldsGpon', 'onuRebootFieldsEpon');
-  onuToggleEponFields('onuDeleteFieldsGpon', 'onuDeleteFieldsEpon');
+  onuToggleEponFields(null, 'onuAddHintEpon');
+  onuPlaceInlineButton('btnOnuQuery', 'onuQueryBtnWrapGpon', 'onuQueryBtnSlotEpon',
+    onuToggleEponFields('onuQueryFieldsGpon', 'onuQueryFieldsEpon'));
+  onuPlaceInlineButton('btnOnuReboot', 'onuRebootBtnWrapGpon', 'onuRebootBtnSlotEpon',
+    onuToggleEponFields('onuRebootFieldsGpon', 'onuRebootFieldsEpon'));
+  onuPlaceInlineButton('btnOnuDelete', 'onuDeleteBtnWrapGpon', 'onuDeleteBtnSlotEpon',
+    onuToggleEponFields('onuDeleteFieldsGpon', 'onuDeleteFieldsEpon'));
   onuToggleEponFields('onuDiscoverResult', 'onuDiscoverResultEpon');
   updateOnuConnectorStatus();
   onuUpdateCapabilities();
@@ -1913,6 +1917,13 @@ function onuToggleEponFields(baseId, eponId) {
   return isEpon;
 }
 
+function onuPlaceInlineButton(buttonId, gponWrapId, eponRowId, isEpon) {
+  const btn = document.getElementById(buttonId);
+  const target = document.getElementById(isEpon ? eponRowId : gponWrapId);
+  if (btn && target && btn.parentElement !== target) target.appendChild(btn);
+  document.getElementById(gponWrapId)?.classList.toggle('hidden', isEpon);
+}
+
 function onuServiceOptionsHtmlForDriver(driver) {
   return String(driver || '').trim().toLowerCase() === 'intelbras_8820i'
     ? ONU_SERVICE_OPTIONS_8820I
@@ -1964,15 +1975,19 @@ function onuAddVlanRow() {
 function onuPortRowEponHtml() {
   return `
     <div class="onu-service-row-epon form-row">
-      <label>Porta ethernet
-        <input type="number" min="1" value="1" class="onu-eth-port-epon">
-      </label>
-      <label>VLAN
-        <div style="display:flex;gap:6px;align-items:center">
-          <input type="number" min="1" class="onu-eth-vlan-epon" style="flex:1">
-          <button type="button" class="icon-button onu-service-row-epon-remove" title="Remover porta"><i data-lucide="x"></i></button>
-        </div>
-      </label>
+      <div class="form-group">
+        <label>Porta ethernet
+          <input type="number" min="1" value="1" class="onu-eth-port-epon">
+        </label>
+      </div>
+      <div class="form-group">
+        <label>VLAN
+          <div style="display:flex;gap:6px;align-items:center">
+            <input type="number" min="1" class="onu-eth-vlan-epon" style="flex:1">
+            <button type="button" class="icon-button onu-service-row-epon-remove" title="Remover porta"><i data-lucide="x"></i></button>
+          </div>
+        </label>
+      </div>
     </div>`;
 }
 
@@ -2433,11 +2448,16 @@ async function onuQueryEpon(olt) {
     onuSetResult('onuQueryResult', esc(data?.error || 'Falha ao consultar sinal.'), true);
     return;
   }
+  const macsHtml = (data.macs || []).length
+    ? `<ul style="margin:6px 0 0;padding-left:18px">${data.macs.map(onuMacLine).join('')}</ul>`
+    : '<p style="margin:6px 0 0">Nenhum MAC aprendido atras dessa ONU ainda.</p>';
+
   onuSetResult('onuQueryResult', `
     <div><b>PON ${esc(data.pon)} / ONU ${esc(data.onu)}</b> - MAC ${esc(data.mac)}</div>
     <div>Estado: ${esc(data.state || '-')} / Distancia: ${esc(data.distance_m ?? '-')} m</div>
     <div>RX: ${esc(data.rx_power_dbm ?? '-')} dBm / TX: ${esc(data.tx_power_dbm ?? '-')} dBm</div>
     <div>Temperatura: ${esc(data.temperature_c ?? '-')} C / Tensao: ${esc(data.voltage_v ?? '-')} V</div>
+    <div style="margin-top:6px"><b>MACs aprendidos:</b>${macsHtml}</div>
   `);
 }
 
@@ -2602,12 +2622,17 @@ async function onuDeleteEpon(olt) {
     return;
   }
   _onuDeleteTarget.mac = data.mac || '';
+  _onuDeleteTarget.vlanHint = onuVlanSummaryFromMacs(data.macs);
   if (confirmBtn) confirmBtn.disabled = false;
+  const macsHtml = (data.macs || []).length
+    ? `<ul style="margin:6px 0 0;padding-left:18px">${data.macs.map(onuMacLine).join('')}</ul>`
+    : '<p style="margin:6px 0 0">Nenhum MAC aprendido atras dessa ONU.</p>';
   panoramaEl.innerHTML = `
     <p>Voce esta prestes a excluir:</p>
     <div style="margin:8px 0;padding:10px 12px;border:1px solid var(--border);border-radius:8px;background:var(--surface-soft)">
       <div><b>PON ${esc(pon)} / ONU ${esc(onuNum)}</b> - MAC ${esc(data.mac || '-')}</div>
       <div style="margin-top:4px">Estado: ${esc(data.state || '-')}</div>
+      <div style="margin-top:6px"><b>${(data.macs || []).length} MAC(s) que vao perder conexao:</b>${macsHtml}</div>
     </div>
     <p style="color:var(--danger);font-size:13px;margin:0">Isso remove o cadastro e desliga o servico dela AGORA na OLT.</p>
   `;
@@ -2673,7 +2698,7 @@ async function onuConfirmDelete() {
   const payload = isEpon
     ? { olt_id: olt.olt_id || null, olt_ip: olt.olt_ip, user: olt.user, password: olt.password,
         olt_vendor: olt.olt_vendor, olt_model: olt.olt_model,
-        pon, onu, serial: mac || '', site: olt.site || '',
+        pon, onu, serial: mac || '', vlan_hint: vlanHint || '', site: olt.site || '',
         connector_id: olt.connector_id || '', remote_connector_id: olt.remote_connector_id || '', connector_name: olt.connector_name || '' }
     : { olt_id: olt.olt_id || null, olt_ip: olt.olt_ip, user: olt.user, password: olt.password, pon, onu,
         vlan_hint: vlanHint || '', site: olt.site || '', connector_id: olt.connector_id || '',

@@ -41,6 +41,7 @@ from app.cli.tools.olt_4840e_collect_macs import (
     _ensure_logged_in,
     _norm_mac,
     _open_shell,
+    _parse_mac_table_onu,
 )
 
 _FAILURE_MARKERS = (
@@ -304,6 +305,22 @@ def onu_signal_4840e(
         diag = _parse_opm_diagnosis(diag_out)
         _cli(chan, "exit", timeout=timeout)
 
+        # MACs das cameras/dispositivos atras da ONU (nao o MAC da propria
+        # ONU, que ja veio de 'show onu-status' acima) -- mesmo comando
+        # ja validado em collect_macs_4840e: precisa do contexto
+        # 'interface pon' (nao o contexto 'onu' usado para o diagnostico
+        # optico acima).
+        macs: List[Dict[str, Any]] = []
+        iface_out = _cli(chan, f"interface pon 0/{pon}", timeout=timeout)
+        if not command_failed(iface_out):
+            mac_out = _cli(chan, f"show mac-address-table onu {addr}", timeout=max(30.0, timeout * 2))
+            for row in _parse_mac_table_onu(mac_out):
+                macs.append({
+                    "mac": row.get("cpe_mac", ""),
+                    "interface": f"VLAN {row.get('vlan', '-')} ({row.get('status', '-')})",
+                })
+            _cli(chan, "exit", timeout=timeout)
+
         return {
             "ok": True,
             "pon": pon,
@@ -313,6 +330,7 @@ def onu_signal_4840e(
             "register_time": match["register_time"],
             "state": match["state"],
             "software": match["software"],
+            "macs": macs,
             **diag,
         }
     finally:

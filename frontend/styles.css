@@ -3183,7 +3183,7 @@ a { color: inherit; text-decoration: none; }
   font-weight: 600;
 }
 .primary-action:hover { background: #066b4d; }
-.primary-action svg { width: 15px; }
+.primary-action svg { width: 15px; height: 15px; }
 .primary-action:disabled { opacity: .5; cursor: not-allowed; }
 .primary-action:disabled:hover { background: var(--primary); }
 
@@ -3200,7 +3200,7 @@ a { color: inherit; text-decoration: none; }
   font-weight: 500;
 }
 .secondary-action:hover { background: var(--surface-soft); }
-.secondary-action svg { width: 15px; }
+.secondary-action svg { width: 15px; height: 15px; }
 .secondary-action:disabled {
   opacity: .55;
   cursor: not-allowed;
@@ -5388,7 +5388,7 @@ body.cam-live-lock {
 }
 .onu-service-row-epon.form-row {
   display: grid;
-  grid-template-columns: minmax(120px, .55fr) minmax(180px, 1fr);
+  grid-template-columns: 1fr 1fr;
   gap: 12px;
   align-items: end;
 }
