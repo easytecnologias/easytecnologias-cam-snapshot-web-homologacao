@@ -2547,10 +2547,15 @@ async function onuQueryVsol(olt) {
     onuSetResult('onuQueryResult', esc(data?.error || 'Falha ao consultar sinal.'), true);
     return;
   }
+  const macsHtml = (data.macs || []).length
+    ? `<ul style="margin:6px 0 0;padding-left:18px">${data.macs.map(onuMacLine).join('')}</ul>`
+    : '<p style="margin:6px 0 0">Nenhum MAC aprendido atras dessa ONU ainda.</p>';
+
   onuSetResult('onuQueryResult', `
     <div><b>PON ${esc(data.pon)} / ONU ${esc(data.onu_id)}</b> - MAC ${esc(data.onu_mac || '-')}</div>
     <div>Estado: ${esc(data.oper_status || '-')} / Distancia: ${esc(data.distance_km ?? '-')} km</div>
     <div>RX: ${esc(data.onu_rx ?? '-')} dBm</div>
+    <div style="margin-top:6px"><b>MACs aprendidos:</b>${macsHtml}</div>
   `);
 }
 
@@ -2787,12 +2792,17 @@ async function onuDeleteVsol(olt) {
     return;
   }
   _onuDeleteTarget.mac = data.onu_mac || '';
+  _onuDeleteTarget.vlanHint = onuVlanSummaryFromMacs(data.macs);
   if (confirmBtn) confirmBtn.disabled = false;
+  const macsHtml = (data.macs || []).length
+    ? `<ul style="margin:6px 0 0;padding-left:18px">${data.macs.map(onuMacLine).join('')}</ul>`
+    : '<p style="margin:6px 0 0">Nenhum MAC aprendido atras dessa ONU.</p>';
   panoramaEl.innerHTML = `
     <p>Voce esta prestes a excluir:</p>
     <div style="margin:8px 0;padding:10px 12px;border:1px solid var(--border);border-radius:8px;background:var(--surface-soft)">
       <div><b>PON ${esc(pon)} / ONU ${esc(onuNum)}</b> - MAC ${esc(data.onu_mac || '-')}</div>
       <div style="margin-top:4px">Estado: ${esc(data.oper_status || '-')}</div>
+      <div style="margin-top:6px"><b>MACs aprendidos:</b>${macsHtml}</div>
     </div>
     <p style="color:var(--danger);font-size:13px;margin:0">Isso remove a autorizacao e desliga o servico dela AGORA na OLT.</p>
   `;

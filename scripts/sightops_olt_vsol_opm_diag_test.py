@@ -33,11 +33,27 @@ ONU-ID      LLID   Status    MAC  Address         RTT(TQ) Description
 EPON0/1:2   3      online    98:2a:0a:a0:25:b9   672     N/A
 epon-olt(config-pon-0/1)#"""
 
+AUTH_INFO_PON01_OFFLINE = """show onu auth-info
+ONU-ID      LLID   Status    MAC  Address         RTT(TQ) Description
+EPON0/1:2   3      offline   98:2a:0a:a0:25:b9   0       N/A
+epon-olt(config-pon-0/1)#"""
+
+MAC_TABLE_ONU2 = """show onu 2 mac-address-table
+ Mac Address Table
+----------------------------------------------------------
+Index   VLAN   MAC  Address         PON       ONU    Aging(s)
+1       1000   54:6c:ac:25:e6:cf    EPON0/1   2      255
+2       1000   80:2a:a8:11:22:33    EPON0/1   2      255
+
+ Total Addresses Found in System :2
+epon-olt(config-pon-0/1)#"""
+
 
 class CanalFalso:
-    def __init__(self, opm: str, auth: str) -> None:
+    def __init__(self, opm: str, auth: str, mac_table: str = "") -> None:
         self.opm = opm
         self.auth = auth
+        self.mac_table = mac_table
         self.comandos: list[str] = []
 
     def resposta(self, cmd: str) -> str:
@@ -48,6 +64,8 @@ class CanalFalso:
             return self.opm
         if cmd == "show onu auth-info":
             return self.auth
+        if cmd == "show onu 2 mac-address-table":
+            return self.mac_table
         return "epon-olt#"
 
 
@@ -89,6 +107,28 @@ def falhas() -> list[str]:
         erros.append(f"onu_signal_vsol: nao mandou 'show onu opm-diag', comandos={canal.comandos}")
     if any("monitor_status" in c for c in canal.comandos):
         erros.append(f"onu_signal_vsol: ainda manda o comando antigo 'monitor_status', comandos={canal.comandos}")
+
+    # 4) ONU online: onu_signal_vsol devolve os MACs das cameras atras dela
+    canal = CanalFalso(OPM_DIAG_PON01, AUTH_INFO_PON01, MAC_TABLE_ONU2)
+    _instala_sessao_falsa(canal)
+    r = vsol.onu_signal_vsol("192.168.200.2", "admin", "x", pon="0/1", onu_id=2)
+    macs = r.get("macs") or []
+    if len(macs) != 2:
+        erros.append(f"onu_signal_vsol: esperava 2 MACs, veio {len(macs)} ({macs})")
+    macs_encontrados = {m.get("mac") for m in macs}
+    if macs_encontrados != {"54:6c:ac:25:e6:cf", "80:2a:a8:11:22:33"}:
+        erros.append(f"onu_signal_vsol: MACs errados, veio {macs_encontrados}")
+    if not any("1000" in (m.get("interface") or "") for m in macs):
+        erros.append(f"onu_signal_vsol: interface deveria citar a VLAN, veio {macs}")
+
+    # 5) ONU offline: nao tenta ler a tabela de MAC (nao ha luz pra aprender nada)
+    canal = CanalFalso(OPM_DIAG_PON01, AUTH_INFO_PON01_OFFLINE, MAC_TABLE_ONU2)
+    _instala_sessao_falsa(canal)
+    r = vsol.onu_signal_vsol("192.168.200.2", "admin", "x", pon="0/1", onu_id=2)
+    if r.get("macs") != []:
+        erros.append(f"onu_signal_vsol: ONU offline nao deveria ter macs, veio {r.get('macs')}")
+    if any("mac-address-table" in c for c in canal.comandos):
+        erros.append(f"onu_signal_vsol: consultou mac-address-table de ONU offline, comandos={canal.comandos}")
 
     return erros
 

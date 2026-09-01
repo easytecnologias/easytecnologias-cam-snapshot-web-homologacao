@@ -797,7 +797,7 @@ def onu_signal_vsol(
     olt_ip: str, user: str, password: str, pon: str, onu_id: Any,
     port: int = 22, timeout: float = 12.0,
 ) -> Dict[str, Any]:
-    """Sinal optico e dados de uma ONU especifica."""
+    """Sinal optico, dados e MACs das cameras (CPEs) atras de uma ONU."""
     alvo = _rotulo_da_pon(pon)
 
     def tarefa(chan):
@@ -807,11 +807,22 @@ def onu_signal_vsol(
         dados = dict(opticos.get(str(onu_id), {}))
         atual = next((l for l in _le_pon(chan, alvo, timeout=timeout)
                       if str(l.get("onu_id")) == str(onu_id)), {})
+        macs: List[Dict[str, Any]] = []
+        if atual.get("oper_status") == "up":
+            try:
+                for cpe in _le_macs_da_onu(chan, onu_id, timeout=timeout):
+                    macs.append({
+                        "mac": cpe.get("cpe_mac", ""),
+                        "interface": "VLAN %s" % (cpe.get("vlan") or "-"),
+                    })
+            except Exception:
+                pass  # ONU sem tabela de MAC (ou comando recusado) nao derruba a consulta
         dados.update({
             "pon": alvo, "onu_id": str(onu_id),
             "onu_mac": atual.get("onu_mac", ""),
             "oper_status": atual.get("oper_status", ""),
             "distance_km": atual.get("distance_km", ""),
+            "macs": macs,
         })
         return dados
 
