@@ -413,22 +413,109 @@ def parse_onu_optical(saida: str) -> Dict[str, Any]:
 
 # ----------------------------------------------------------------- comandos
 
-def build_delete_onu_vsol_command(pon: str, onu_id: Any = "", mac: str = "") -> List[str]:
-    """Comandos para remover uma ONU autorizada.
+def build_delete_onu_vsol_command(pon: str, onu_id: Any) -> List[str]:
+    """Comandos para remover a autorizacao de uma ONU.
 
-    Devolve a sequencia em vez de executar: quem chama decide se roda, e o
-    comando fica visivel no log antes de tocar em cliente ativo.
-    """
+    'no onu auth onuid' revoga a autorizacao (a ONU nao volta sozinha).
+    'deregister' (usado numa versao anterior deste driver) so desconecta --
+    confirmado no manual oficial desta OLT, secoes 17.1.2 e 17.1.3. Devolve
+    a sequencia em vez de executar: quem chama decide se roda, e o comando
+    fica visivel no log antes de tocar em cliente ativo."""
     pon = str(pon or "").strip()
     if not pon:
         raise ValueError("pon e obrigatorio para excluir ONU")
-    if onu_id not in ("", None):
-        alvo = f"deregister onu auth onuid {int(onu_id)}"
-    elif mac:
-        alvo = f"deregister onu unauth {_norm_mac(mac)}"
-    else:
-        raise ValueError("informe onu_id ou mac para excluir ONU")
-    return ["end", "configure terminal", f"interface epon {pon}", alvo]
+    if onu_id in ("", None):
+        raise ValueError("onu_id e obrigatorio para excluir ONU nesta OLT")
+    return ["end", "configure terminal", f"interface epon {pon}", f"no onu auth onuid {int(onu_id)}"]
+
+
+def delete_onu_vsol(
+    olt_ip: str, user: str, password: str, pon: str, onu_id: Any,
+    port: int = 22, timeout: float = 15.0,
+) -> Dict[str, Any]:
+    """Remove a autorizacao de uma ONU (nao apenas desconecta -- ver
+    build_delete_onu_vsol_command)."""
+    alvo = _rotulo_da_pon(pon)
+    if onu_id in ("", None):
+        return {"ok": False, "error": "onu_id e obrigatorio para excluir ONU nesta OLT"}
+
+    def tarefa(chan):
+        _entra_na_pon(chan, alvo, timeout=timeout)
+        saida = _manda(chan, f"no onu auth onuid {int(onu_id)}", ["config-pon"], timeout=timeout)
+        if _comando_falhou(saida):
+            return {"ok": False, "error": f"a OLT recusou excluir a ONU {onu_id}: {saida.strip()[:300]}"}
+        return {"ok": True, "pon": alvo, "onu_id": str(onu_id)}
+
+    return _com_sessao_vsol(olt_ip, user, password, port, timeout, tarefa)
+
+
+def reboot_onu_vsol(
+    olt_ip: str, user: str, password: str, pon: str, onu_id: Any,
+    port: int = 22, timeout: float = 15.0,
+) -> Dict[str, Any]:
+    """Reinicia uma ONU ja autorizada. Diferente da 4840E, esta OLT nao pede
+    confirmacao y/n pra este comando (a confirmar ao vivo antes de producao)."""
+    alvo = _rotulo_da_pon(pon)
+    if onu_id in ("", None):
+        return {"ok": False, "error": "onu_id e obrigatorio para reiniciar ONU nesta OLT"}
+
+    def tarefa(chan):
+        _entra_na_pon(chan, alvo, timeout=timeout)
+        saida = _manda(chan, f"onu {int(onu_id)} ctc reset", ["config-pon"], timeout=timeout)
+        if _comando_falhou(saida):
+            return {"ok": False, "error": f"a OLT recusou reiniciar a ONU {onu_id}: {saida.strip()[:300]}"}
+        return {"ok": True, "pon": alvo, "onu_id": str(onu_id)}
+
+    return _com_sessao_vsol(olt_ip, user, password, port, timeout, tarefa)
+
+
+def _comando_falhou(saida: str) -> bool:
+    """Mesmo criterio de erro ja usado em _entra_na_pon, como funcao
+    reutilizavel para os comandos novos de autorizar/excluir/reiniciar."""
+    baixo = (saida or "").lower()
+    return "unknown command" in baixo or "% invalid" in baixo
+
+
+def add_onu_vsol(
+    olt_ip: str, user: str, password: str, pon: str, mac: str,
+    port: int = 22, timeout: float = 15.0,
+) -> Dict[str, Any]:
+    """Autoriza uma ONU pelo MAC (whitelist). A OLT atribui o onu-id sozinha
+    -- tenta ler de volta ('show onu auth-info') ate 3 vezes, 2s entre
+    tentativas, antes de desistir de informar a posicao. A autorizacao ja
+    aconteceu de qualquer jeito nesse caso; so a posicao fica pendente."""
+    alvo = _rotulo_da_pon(pon)
+    mac_norm = _norm_mac(mac)
+    if not mac_norm:
+        return {"ok": False, "error": "mac e obrigatorio para autorizar ONU nesta OLT"}
+
+    def tarefa(chan):
+        _entra_na_pon(chan, alvo, timeout=timeout)
+        saida = _manda(chan, f"onu mac-auth add {mac_norm}", ["config-pon"], timeout=timeout)
+        if _comando_falhou(saida):
+            return {"ok": False, "error": f"a OLT recusou autorizar o MAC {mac_norm}: {saida.strip()[:300]}"}
+
+        onu_id = ""
+        for _ in range(3):
+            time.sleep(2)
+            auth = _manda(chan, "show onu auth-info", ["config-pon"], timeout=max(20.0, timeout))
+            achado = next(
+                (l for l in parse_onu_auth_info(auth) if _norm_mac(l.get("onu_mac")) == mac_norm),
+                None,
+            )
+            if achado:
+                onu_id = achado.get("onu_id", "")
+                break
+
+        return {
+            "ok": True,
+            "pon": alvo,
+            "onu_id": onu_id,
+            "onu_mac": mac_norm,
+            "pending": not onu_id,
+        }
+
+    return _com_sessao_vsol(olt_ip, user, password, port, timeout, tarefa)
 
 
 # ------------------------------------------------------------------- sessao

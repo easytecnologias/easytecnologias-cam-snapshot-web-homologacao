@@ -87,12 +87,12 @@ def olt_capabilities(vendor: Any = "", model: Any = "") -> Dict[str, Any]:
             "discover_onus": True,
             "find_onu": True,
             "onu_signal": True,
+            "add_onu": True,
+            "delete_onu": True,
+            "reboot_onu": True,
         })
         label = "VSOL EPON"
-        notes = (
-            "Homologada para inventario, telemetria, descoberta e consulta de ONU. "
-            "Autorizar e excluir ONU seguem bloqueados ate homologacao do provisionamento."
-        )
+        notes = "Homologada: inventario, telemetria, descoberta, consulta, autorizar, excluir e reiniciar ONU."
     else:
         label = "OLT nao homologada"
         notes = "Cadastre o modelo para inventario, mas comandos na OLT ficam bloqueados ate homologacao."
