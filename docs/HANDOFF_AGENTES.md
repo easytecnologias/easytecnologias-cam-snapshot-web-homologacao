@@ -1797,9 +1797,35 @@ tela (não no driver isolado):**
   chamada estruturada de outro jeito, sem o bug) -- corrigido só no
   arquivo real do container, sem equivalente pra commitar no repo.
 
+**Mais dois achados, reportados pelo usuário testando ao vivo na tela:**
+- "Consultar sinal" do VSOL nunca trouxe os MACs das câmeras atrás da ONU
+  (só dados óticos) -- diferente do 4840E, que já faz isso. `onu_signal_vsol`
+  já tinha `_le_macs_da_onu` pronta (usada só na coleta de inventário);
+  faltava chamar dela. Agora consulta `show onu <id> mac-address-table`
+  quando a ONU está online e devolve `macs=[{mac, interface}]`. Frontend
+  (`onuQueryVsol`/`onuDeleteVsol`) renderiza a lista igual já fazia pro
+  4840E. Validado ao vivo: ONU 0/2/7 tinha 4 câmeras reais atrás (VLAN 2000).
+- **Excluir ONU não limpava a topologia da câmera na tela "Cameras IP".**
+  Usuário excluiu a ONU 0/2/7 e as 4 câmeras atrás dela continuaram
+  mostrando PON/ONU/"ONU online" antigos. Causa: o merge do frontend
+  (`cameras.js` linha ~1685) só ATUALIZA um campo quando acha o MAC de novo
+  do lado da OLT numa consulta nova (`olt.pon || c.pon || ''`) -- nunca
+  limpa sozinho quando o MAC some porque a ONU foi excluída, já que cai no
+  fallback do valor antigo guardado na própria linha da câmera. A infra pra
+  limpar já existia (`_sync_camera_inventory_from_olt_rows` tem um parâmetro
+  `clear_macs`), só nunca era chamada a partir de excluir. Nova função
+  `_clear_deleted_onu_from_camera_inventory` (em `app/services/olt_service.py`,
+  chamada de `delete_onu`) casa por posição (`olt_ip` + `pon` + `onu_id`),
+  com `_pon_num` normalizando `"0/2"` (formato EPON, VSOL/4840E) e `"2"`
+  (formato GPON, 8820i) pro mesmo texto -- **essa mesma lacuna vale pro
+  4840E também**, não é exclusiva do VSOL (nunca tinha sido testada de
+  ponta a ponta contra o formato "0/N"). Teste:
+  `scripts/sightops_olt_delete_clears_camera_topology_test.py`.
+
 **Deploy feito em produção (v2 e v3) em 2026-09-01**, imagem final
-`sightops-prod-api:20260901-vsol-syncfix` (3 camadas em cima da base:
-`vsol-write` -> `vsol-discover` -> `vsol-syncfix`), construída em
+`sightops-prod-api:20260901-vsol-camclear` (5 camadas em cima da base:
+`vsol-write` -> `vsol-discover` -> `vsol-syncfix` -> `vsol-macs` ->
+`vsol-camclear`), construída em
 `/home/central/sightops-prod-release/build-api-vsol/` (novo diretório --
 o `build-api/` antigo tinha um `Dockerfile` com `FROM` apontando pra uma
 tag velha, `20260820-tgolt`, e um `maintenance.py` com 612 linhas de drift
