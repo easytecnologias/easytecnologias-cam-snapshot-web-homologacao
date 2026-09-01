@@ -431,6 +431,53 @@ def build_delete_onu_vsol_command(pon: str, onu_id: Any = "", mac: str = "") -> 
     return ["end", "configure terminal", f"interface epon {pon}", alvo]
 
 
+def _comando_falhou(saida: str) -> bool:
+    """Mesmo criterio de erro ja usado em _entra_na_pon, como funcao
+    reutilizavel para os comandos novos de autorizar/excluir/reiniciar."""
+    baixo = (saida or "").lower()
+    return "unknown command" in baixo or "% invalid" in baixo
+
+
+def add_onu_vsol(
+    olt_ip: str, user: str, password: str, pon: str, mac: str,
+    port: int = 22, timeout: float = 15.0,
+) -> Dict[str, Any]:
+    """Autoriza uma ONU pelo MAC (whitelist). A OLT atribui o onu-id sozinha
+    -- tenta ler de volta ('show onu auth-info') ate 3 vezes, 2s entre
+    tentativas, antes de desistir de informar a posicao. A autorizacao ja
+    aconteceu de qualquer jeito nesse caso; so a posicao fica pendente."""
+    alvo = _rotulo_da_pon(pon)
+    mac_norm = _norm_mac(mac)
+
+    def tarefa(chan):
+        _entra_na_pon(chan, alvo, timeout=timeout)
+        saida = _manda(chan, f"onu mac-auth add {mac_norm}", ["config-pon"], timeout=timeout)
+        if _comando_falhou(saida):
+            return {"ok": False, "error": f"a OLT recusou autorizar o MAC {mac_norm}: {saida.strip()[:300]}"}
+
+        onu_id = ""
+        for _ in range(3):
+            time.sleep(2)
+            auth = _manda(chan, "show onu auth-info", ["config-pon"], timeout=max(20.0, timeout))
+            achado = next(
+                (l for l in parse_onu_auth_info(auth) if _norm_mac(l.get("onu_mac")) == mac_norm),
+                None,
+            )
+            if achado:
+                onu_id = achado.get("onu_id", "")
+                break
+
+        return {
+            "ok": True,
+            "pon": alvo,
+            "onu_id": onu_id,
+            "onu_mac": mac_norm,
+            "pending": not onu_id,
+        }
+
+    return _com_sessao_vsol(olt_ip, user, password, port, timeout, tarefa)
+
+
 # ------------------------------------------------------------------- sessao
 
 def _prompt_da_pon(saida: str) -> str:
