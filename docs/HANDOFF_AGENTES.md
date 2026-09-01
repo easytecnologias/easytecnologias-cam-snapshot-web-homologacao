@@ -1772,8 +1772,23 @@ vivo na sequência:**
 
 **Teste:** `scripts/sightops_olt_vsol_add_onu_test.py` (autorizar/excluir/
 reiniciar) e `scripts/sightops_olt_vsol_opm_diag_test.py` (parser de
-potência óptica + `onu_signal_vsol`, novo). Nenhum deploy em produção feito
-ainda -- a branch foi mesclada no `main` local, toda validação ao vivo
-(incluindo estes dois fixes) rodou direto contra o código do worktree/main
-local, sem tocar no container de produção, via `docker run --rm` efêmero
-na mesma network (`sightops-prod-platform`).
+potência óptica + `onu_signal_vsol`, novo). Toda validação ao vivo rodou
+direto contra o código do worktree/main local, sem tocar no container de
+produção, via `docker run --rm` efêmero na mesma network
+(`sightops-prod-platform`).
+
+**Deploy feito em produção (v2 e v3) em 2026-09-01**, imagem
+`sightops-prod-api:20260901-vsol-write`, construída em
+`/home/central/sightops-prod-release/build-api-vsol/` (novo diretório --
+o `build-api/` antigo tinha um `Dockerfile` com `FROM` apontando pra uma
+tag velha, `20260820-tgolt`, e um `maintenance.py` com 612 linhas de drift
+em relação ao que estava rodando de verdade; não confiar nele sem
+reconferir contra o container real primeiro). `olt_service.py` de produção
+tinha bastante código que não existe no git local (poda de ONUs sumidas,
+validação de conector, e uma wiring própria de VSOL em `onu_signal`/
+`find_onu` -- mais simples que a desta branch, já tratava o `ok`/RX, só
+não tinha `add_onu`/`delete_onu`/`reboot_onu`) -- reconciliado à mão,
+preservando tudo que já existia e só acrescentando os três `elif
+_is_vsol(req):` que faltavam. `.env.production` e `.env.v3` atualizados
+com a tag nova. Frontend copiado com backup (`.bak-vsolwrite-20260901`) em
+ambos os `frontend/` de release.
