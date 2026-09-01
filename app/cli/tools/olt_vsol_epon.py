@@ -742,13 +742,31 @@ def discover_onus_vsol(
     olt_ip: str, user: str, password: str, pon: str = "all",
     port: int = 22, timeout: float = 12.0,
 ) -> Dict[str, Any]:
-    """ONUs vistas na fibra e ainda nao autorizadas."""
+    """ONUs vistas na fibra e ainda nao autorizadas.
+
+    `show onu discover` lista TODA ONU com o link OAM/MPCP completo,
+    autorizada ou nao -- nao e uma lista de pendentes. Com `onu auth-mode
+    disable` isso nunca aparecia (a ONU virava autorizada na hora, sem
+    passar tempo nenhum "so descoberta"); com `mac-auth` ativo (a partir de
+    2026-09-01, ver docs/HANDOFF_AGENTES.md) uma ONU ja autorizada continua
+    aparecendo aqui pra sempre, porque o OAM/MPCP dela segue completo.
+    Por isso cruza contra `show onu auth-info` (via `_le_pon`) e tira quem
+    ja esta autorizado antes de devolver -- senao a tela mostra toda ONU ja
+    em producao como "descoberta, clique pra autorizar".
+    """
     def tarefa(chan):
         achadas: List[Dict[str, Any]] = []
         for alvo in _pons_existentes(chan, pon, timeout=timeout):
             _entra_na_pon(chan, alvo, timeout=timeout)
+            ja_autorizados = {
+                _norm_mac(l.get("onu_mac"))
+                for l in _le_pon(chan, alvo, timeout=timeout)
+                if _norm_mac(l.get("onu_mac"))
+            }
             bruto = _manda(chan, "show onu discover", ["config-pon"], timeout=max(30.0, timeout * 2))
             for item in parse_onu_discover(bruto):
+                if _norm_mac(item.get("onu_mac")) in ja_autorizados:
+                    continue
                 item["pon"] = item.get("pon") or alvo
                 achadas.append(item)
         return {"ok": True, "onus": achadas, "total": len(achadas)}
