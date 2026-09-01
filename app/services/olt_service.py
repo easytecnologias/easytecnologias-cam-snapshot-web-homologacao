@@ -40,11 +40,14 @@ from app.cli.tools.olt_4840e_add_onu import (
     reboot_onu_4840e,
 )
 from app.cli.tools.olt_vsol_epon import (
+    add_onu_vsol,
     collect_macs_vsol,
     collect_onu_telemetry_vsol,
+    delete_onu_vsol,
     discover_onus_vsol,
     find_onu_vsol,
     onu_signal_vsol,
+    reboot_onu_vsol,
 )
 from app.cli.tools.olt_8820i_add_onu import (
     OnuAddError,
@@ -1135,6 +1138,15 @@ def add_onu(req: OltAddOnuRequest) -> Dict[str, Any]:
                     pon=req.pon, mac=req.serial, description=req.description,
                     ports=ports, timeout=req.timeout,
                 )
+            elif _is_vsol(req):
+                vsol_result = add_onu_vsol(
+                    olt_ip=req.olt_ip, user=req.user, password=req.password,
+                    pon=str(req.pon), mac=req.serial, timeout=req.timeout,
+                )
+                result = dict(vsol_result)
+                if result.get("ok"):
+                    result["onu"] = result.get("onu_id")
+                    result["slot"] = result.get("onu_id")
             else:
                 result = _add_onu_8820i(
                     olt_ip=req.olt_ip,
@@ -1154,7 +1166,7 @@ def add_onu(req: OltAddOnuRequest) -> Dict[str, Any]:
                     timeout=req.timeout,
                 )
             if result.get("ok"):
-                if not _is_intelbras_4840e(req):
+                if not _is_intelbras_4840e(req) and not _is_vsol(req):
                     result["inventory"] = _upsert_onu_inventory(req, result)
                     result["device_sync"] = _sync_authorized_onu_devices(req, result)
                 log_onu_action(
@@ -1264,6 +1276,11 @@ def delete_onu(req: OltDeleteOnuRequest) -> Dict[str, Any]:
                     olt_ip=req.olt_ip, user=req.user, password=req.password,
                     pon=req.pon, onu=req.onu, mac=req.serial, timeout=req.timeout,
                 )
+            elif _is_vsol(req):
+                result = delete_onu_vsol(
+                    olt_ip=req.olt_ip, user=req.user, password=req.password,
+                    pon=str(req.pon), onu_id=req.onu, timeout=req.timeout,
+                )
             else:
                 result = _delete_onu_8820i(
                     olt_ip=req.olt_ip,
@@ -1297,6 +1314,11 @@ def reboot_onu(req: OltRebootOnuRequest) -> Dict[str, Any]:
                 result = reboot_onu_4840e(
                     olt_ip=req.olt_ip, user=req.user, password=req.password,
                     pon=req.pon, onu=req.onu, timeout=req.timeout,
+                )
+            elif _is_vsol(req):
+                result = reboot_onu_vsol(
+                    olt_ip=req.olt_ip, user=req.user, password=req.password,
+                    pon=str(req.pon), onu_id=req.onu, timeout=req.timeout,
                 )
             else:
                 result = _reboot_onu_8820i(
