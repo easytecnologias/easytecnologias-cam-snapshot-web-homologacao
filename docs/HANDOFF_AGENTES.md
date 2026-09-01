@@ -1777,8 +1777,29 @@ direto contra o código do worktree/main local, sem tocar no container de
 produção, via `docker run --rm` efêmero na mesma network
 (`sightops-prod-platform`).
 
-**Deploy feito em produção (v2 e v3) em 2026-09-01**, imagem
-`sightops-prod-api:20260901-vsol-write`, construída em
+**Dois achados a mais, só depois do primeiro deploy, testando ao vivo na
+tela (não no driver isolado):**
+- `show onu discover` lista TODA ONU com o link OAM/MPCP completo,
+  autorizada ou não -- nunca foi "só pendentes". Com `auth-mode disable`
+  isso nunca aparecia (a ONU virava autorizada na hora); ao ligar
+  `mac-auth`, as 21 ONUs já em produção passaram a aparecer na tela
+  "Descobrir ONUs" como se fossem novas. Corrigido em
+  `discover_onus_vsol` (`app/cli/tools/olt_vsol_epon.py`): cruza contra
+  `show onu auth-info` e tira quem já está autorizado.
+- "Consultar sinal" de uma ONU VSOL quebrava com
+  `invalid literal for int() with base 10: '0/2'`. Causa: em produção,
+  `onu_signal()` chamava `_sync_onu_signal_inventory(req, result)`
+  (sincroniza inventário de câmeras) pra qualquer driver que não fosse
+  4840E -- mas essa função espera `pon` como número simples (convenção
+  GPON), e o driver VSOL devolve `result["pon"] = "0/2"` (rótulo com
+  slot/porta, igual o 4840E). O 4840E já tinha essa exclusão; faltou
+  estender pro VSOL. Só existe em produção (o git local já tinha essa
+  chamada estruturada de outro jeito, sem o bug) -- corrigido só no
+  arquivo real do container, sem equivalente pra commitar no repo.
+
+**Deploy feito em produção (v2 e v3) em 2026-09-01**, imagem final
+`sightops-prod-api:20260901-vsol-syncfix` (3 camadas em cima da base:
+`vsol-write` -> `vsol-discover` -> `vsol-syncfix`), construída em
 `/home/central/sightops-prod-release/build-api-vsol/` (novo diretório --
 o `build-api/` antigo tinha um `Dockerfile` com `FROM` apontando pra uma
 tag velha, `20260820-tgolt`, e um `maintenance.py` com 612 linhas de drift
