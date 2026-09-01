@@ -1691,7 +1691,9 @@ function onuApplyRegisteredOlt() {
     onuToggleDriverFields('onuRebootFieldsGpon', 'onuRebootFieldsEpon', 'onuRebootFieldsVsol'));
   onuPlaceInlineButton('btnOnuDelete', 'onuDeleteBtnWrapGpon', 'onuDeleteBtnSlotEpon', 'onuDeleteBtnSlotVsol',
     onuToggleDriverFields('onuDeleteFieldsGpon', 'onuDeleteFieldsEpon', 'onuDeleteFieldsVsol'));
-  onuToggleDriverFields('onuDiscoverResult', 'onuDiscoverResultEpon', null);
+  const _discoverKind = onuActiveOltKind(onuSelectedRegistryRow());
+  document.getElementById('onuDiscoverResult')?.classList.toggle('hidden', _discoverKind === 'epon');
+  document.getElementById('onuDiscoverResultEpon')?.classList.toggle('hidden', _discoverKind !== 'epon');
   updateOnuConnectorStatus();
   onuUpdateCapabilities();
   onuUpdateStepsLock();
@@ -2235,13 +2237,18 @@ async function onuDiscover() {
     onuSetResult('onuDiscoverResult', `Nenhuma ONU nao autorizada encontrada. ${freeSummary.join(' | ')}`);
     return;
   }
-  onuSetResult('onuDiscoverResult', allDiscovered.map(d => `
-    <div class="deploy-match deploy-onu-pick" data-pon="${esc(d.pon)}" data-serno="${esc(d.serno_id)}" data-serial="${esc(d.serial)}" data-serial-raw="${esc(d.serial_raw || d.serial)}" data-model="${esc(d.model)}" data-vendor="${esc(d.vendor)}" style="cursor:pointer">
-      <b>${esc(d.serial)}</b>
-      <span>PON ${esc(d.pon)} - ${esc(d.vendor)} ${esc(d.model)}</span>
+  onuSetResult('onuDiscoverResult', allDiscovered.map(d => {
+    const display = d.serial || d.onu_serial || d.onu_mac || '';
+    const macValue = d.onu_mac || d.serial || '';
+    const vendorModel = (d.vendor || d.model) ? ` - ${esc(d.vendor || '')} ${esc(d.model || '')}`.trim() : '';
+    return `
+    <div class="deploy-match deploy-onu-pick" data-pon="${esc(d.pon)}" data-serno="${esc(d.serno_id)}" data-serial="${esc(display)}" data-serial-raw="${esc(d.serial_raw || display)}" data-model="${esc(d.model)}" data-vendor="${esc(d.vendor)}" data-mac="${esc(macValue)}" style="cursor:pointer">
+      <b>${esc(display)}</b>
+      <span>PON ${esc(d.pon)}${vendorModel}</span>
       <small>descoberta ${esc(d.time_discovered || '')} - clique para selecionar</small>
     </div>
-  `).join(''));
+  `;
+  }).join(''));
   document.querySelectorAll('#onuDiscoverResult .deploy-onu-pick').forEach(el => {
     el.addEventListener('click', () => {
       _onuSelectedDiscovered = {
@@ -2251,7 +2258,17 @@ async function onuDiscover() {
         serialRaw: el.dataset.serialRaw || el.dataset.serial,
         model: el.dataset.model,
         vendor: el.dataset.vendor,
+        mac: el.dataset.mac,
       };
+      if (onuIsVsol(onuSelectedRegistryRow())) {
+        const macVsolEl = document.getElementById('onuAddMacVsol');
+        const ponVsolEl = document.getElementById('onuAddPonVsol');
+        if (macVsolEl) macVsolEl.value = el.dataset.mac || el.dataset.serial || '';
+        if (ponVsolEl) ponVsolEl.value = el.dataset.pon || '';
+        showToast(`ONU ${el.dataset.mac || el.dataset.serial} selecionada (PON ${el.dataset.pon}).`);
+        onuAccordionOpen('onuStepAdd');
+        return;
+      }
       const sernoEl = document.getElementById('onuAddSernoId');
       const modelEl = document.getElementById('onuAddModel');
       const queryPonEl = document.getElementById('onuQueryPon');

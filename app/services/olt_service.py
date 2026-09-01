@@ -71,7 +71,7 @@ logger = logging.getLogger("cam-snapshot")
 def _is_vsol(req: Any) -> bool:
     """OLT VSOL EPON -- identificada pelo fabricante ou pelo modelo."""
     vendor = str(getattr(req, "olt_vendor", "") or getattr(req, "vendor", "") or "").strip().lower()
-    model = str(getattr(req, "olt_model", "") or "").strip().lower()
+    model = str(getattr(req, "olt_model", "") or "").strip().lower().replace("_", "-")
     return vendor in ("vsol", "v-sol", "vsolution") or model.startswith(("vsol", "v1600", "epon-olt"))
 
 
@@ -1338,7 +1338,7 @@ def reboot_onu(req: OltRebootOnuRequest) -> Dict[str, Any]:
             log_onu_action(
                 "reboot_onu", olt_id=req.olt_id, olt_ip=req.olt_ip, olt_name=req.olt_name, site=req.site,
                 pon=req.pon, onu=req.onu, ok=bool(result.get("ok")),
-                detail="" if result.get("ok") else str(result.get("raw_output") or "")[:200],
+                detail="" if result.get("ok") else str(result.get("raw_output") or result.get("error") or "")[:200],
             )
             return result
         except HTTPException:
@@ -1360,6 +1360,15 @@ def onu_signal(req: OltOnuSignalRequest) -> Dict[str, Any]:
                 )
                 if result.get("ok"):
                     _enrich_signal_macs_with_ips(result)
+            elif _is_vsol(req):
+                result = {
+                    "ok": True,
+                    **onu_signal_vsol(
+                        olt_ip=req.olt_ip, user=req.user, password=req.password,
+                        pon=str(req.pon), onu_id=req.onu, timeout=req.timeout,
+                    ),
+                }
+                _enrich_signal_macs_with_ips(result)
             else:
                 result = _onu_signal_8820i(
                     olt_ip=req.olt_ip,

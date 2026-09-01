@@ -486,6 +486,8 @@ def add_onu_vsol(
     aconteceu de qualquer jeito nesse caso; so a posicao fica pendente."""
     alvo = _rotulo_da_pon(pon)
     mac_norm = _norm_mac(mac)
+    if not mac_norm:
+        return {"ok": False, "error": "mac e obrigatorio para autorizar ONU nesta OLT"}
 
     def tarefa(chan):
         _entra_na_pon(chan, alvo, timeout=timeout)
