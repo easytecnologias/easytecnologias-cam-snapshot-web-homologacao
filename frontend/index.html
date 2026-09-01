@@ -3770,6 +3770,19 @@
                     </div>
                   </div>
                 </div>
+                <div id="onuAddFieldsVsol" class="hidden">
+                  <div class="form-row">
+                    <div class="form-group">
+                      <label for="onuAddPonVsol">PON</label>
+                      <select id="onuAddPonVsol"></select>
+                    </div>
+                    <div class="form-group">
+                      <label>MAC da ONU
+                        <input type="text" id="onuAddMacVsol" placeholder="aa:bb:cc:dd:ee:ff">
+                      </label>
+                    </div>
+                  </div>
+                </div>
                 <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin:2px 0 10px;flex-wrap:wrap">
                   <div>
                     <p class="hint hidden" id="onuAddHintEpon" style="margin:0 0 6px">A ONU sai liberada pra transmitir (camera) automaticamente ao autorizar.</p>
@@ -3822,6 +3835,21 @@
                     <label style="visibility:hidden">.</label>
                   </div>
                 </div>
+                <div id="onuQueryFieldsVsol" class="hidden form-row" style="grid-template-columns:1fr 1fr auto;align-items:end">
+                  <div class="form-group">
+                    <label>PON
+                      <select id="onuQueryPonVsol"></select>
+                    </label>
+                  </div>
+                  <div class="form-group">
+                    <label>ONU (posicao)
+                      <input type="number" min="1" id="onuQueryOnuNumVsol">
+                    </label>
+                  </div>
+                  <div class="form-group" id="onuQueryBtnSlotVsol">
+                    <label style="visibility:hidden">.</label>
+                  </div>
+                </div>
                 <div class="deploy-inline-button" id="onuQueryBtnWrapGpon" style="margin:2px 0 10px">
                   <button class="secondary-action" id="btnOnuQuery" type="button" style="padding:9px 16px;white-space:nowrap"><i data-lucide="activity"></i> Consultar sinal / MACs</button>
                 </div>
@@ -3863,6 +3891,21 @@
                     </label>
                   </div>
                   <div class="form-group" id="onuRebootBtnSlotEpon">
+                    <label style="visibility:hidden">.</label>
+                  </div>
+                </div>
+                <div id="onuRebootFieldsVsol" class="hidden form-row" style="grid-template-columns:1fr 1fr auto;align-items:end">
+                  <div class="form-group">
+                    <label>PON
+                      <select id="onuRebootPonVsol"></select>
+                    </label>
+                  </div>
+                  <div class="form-group">
+                    <label>ONU (posicao)
+                      <input type="number" min="1" id="onuRebootOnuNumVsol">
+                    </label>
+                  </div>
+                  <div class="form-group" id="onuRebootBtnSlotVsol">
                     <label style="visibility:hidden">.</label>
                   </div>
                 </div>
@@ -3911,6 +3954,21 @@
                     </label>
                   </div>
                   <div class="form-group" id="onuDeleteBtnSlotEpon">
+                    <label style="visibility:hidden">.</label>
+                  </div>
+                </div>
+                <div id="onuDeleteFieldsVsol" class="hidden form-row" style="grid-template-columns:1fr 1fr auto;align-items:end">
+                  <div class="form-group">
+                    <label>PON
+                      <select id="onuDeletePonVsol"></select>
+                    </label>
+                  </div>
+                  <div class="form-group">
+                    <label>ONU (posicao)
+                      <input type="number" min="1" id="onuDeleteOnuNumVsol">
+                    </label>
+                  </div>
+                  <div class="form-group" id="onuDeleteBtnSlotVsol">
                     <label style="visibility:hidden">.</label>
                   </div>
                 </div>
@@ -6122,7 +6180,7 @@
   <script src="js/maintenance.js?v=146"></script>
   <script src="js/analysis.js?v=144"></script>
   <script src="js/network.js?v=158"></script>
-  <script src="js/deploy.js?v=184"></script>
+  <script src="js/deploy.js?v=185"></script>
   <script src="js/deployOlt.js?v=159"></script>
   <script src="js/connectors.js?v=161"></script>
   <script src="js/monitoring.js?v=9"></script>
