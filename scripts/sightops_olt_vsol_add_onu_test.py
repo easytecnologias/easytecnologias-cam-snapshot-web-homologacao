@@ -105,6 +105,44 @@ def falhas() -> list[str]:
     if not r.get("ok") or r.get("onu_id") != "9":
         erros.append(f"MAC nao normalizado corretamente: {r}")
 
+    # 5) build_delete_onu_vsol_command monta o comando CERTO (nao "deregister",
+    #    que so desconecta e a ONU volta sozinha -- confirmado no manual)
+    comandos = vsol.build_delete_onu_vsol_command("0/1", 9)
+    if "no onu auth onuid 9" not in comandos:
+        erros.append(f"delete: comando certo nao apareceu, veio {comandos}")
+    if any("deregister" in c for c in comandos):
+        erros.append(f"delete: ainda monta 'deregister' (so desconecta, nao remove): {comandos}")
+
+    # 6) sem onu_id, tem que falhar explicito (nesta OLT nao da pra excluir so por MAC)
+    try:
+        vsol.build_delete_onu_vsol_command("0/1", "")
+        erros.append("delete: aceitou onu_id vazio sem levantar erro")
+    except ValueError:
+        pass
+
+    # 7) delete_onu_vsol feliz
+    canal = CanalFalso(AUTH_INFO_COM_NOVA_ONU)
+    _instala_sessao_falsa(canal)
+    r = vsol.delete_onu_vsol("192.168.200.2", "admin", "x", pon="0/1", onu_id=9)
+    if not r.get("ok"):
+        erros.append(f"delete_onu_vsol: ok=False, esperava True ({r})")
+    if not any(c == "no onu auth onuid 9" for c in canal.comandos):
+        erros.append(f"delete_onu_vsol: nao mandou 'no onu auth onuid 9', comandos={canal.comandos}")
+
+    # 8) delete_onu_vsol com erro da OLT
+    class CanalFalsoComErro(CanalFalso):
+        def resposta(self, cmd: str) -> str:
+            self.comandos.append(cmd)
+            if cmd == "no onu auth onuid 9":
+                return "% invalid parameter\nepon-olt(config-pon-0/1)#"
+            return super().resposta(cmd)
+
+    canal = CanalFalsoComErro(AUTH_INFO_COM_NOVA_ONU)
+    _instala_sessao_falsa(canal)
+    r = vsol.delete_onu_vsol("192.168.200.2", "admin", "x", pon="0/1", onu_id=9)
+    if r.get("ok"):
+        erros.append("delete_onu_vsol: OLT recusou o comando, mas devolveu ok=True")
+
     return erros
 
 

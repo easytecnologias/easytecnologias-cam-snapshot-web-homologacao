@@ -413,22 +413,40 @@ def parse_onu_optical(saida: str) -> Dict[str, Any]:
 
 # ----------------------------------------------------------------- comandos
 
-def build_delete_onu_vsol_command(pon: str, onu_id: Any = "", mac: str = "") -> List[str]:
-    """Comandos para remover uma ONU autorizada.
+def build_delete_onu_vsol_command(pon: str, onu_id: Any) -> List[str]:
+    """Comandos para remover a autorizacao de uma ONU.
 
-    Devolve a sequencia em vez de executar: quem chama decide se roda, e o
-    comando fica visivel no log antes de tocar em cliente ativo.
-    """
+    'no onu auth onuid' revoga a autorizacao (a ONU nao volta sozinha).
+    'deregister' (usado numa versao anterior deste driver) so desconecta --
+    confirmado no manual oficial desta OLT, secoes 17.1.2 e 17.1.3. Devolve
+    a sequencia em vez de executar: quem chama decide se roda, e o comando
+    fica visivel no log antes de tocar em cliente ativo."""
     pon = str(pon or "").strip()
     if not pon:
         raise ValueError("pon e obrigatorio para excluir ONU")
-    if onu_id not in ("", None):
-        alvo = f"deregister onu auth onuid {int(onu_id)}"
-    elif mac:
-        alvo = f"deregister onu unauth {_norm_mac(mac)}"
-    else:
-        raise ValueError("informe onu_id ou mac para excluir ONU")
-    return ["end", "configure terminal", f"interface epon {pon}", alvo]
+    if onu_id in ("", None):
+        raise ValueError("onu_id e obrigatorio para excluir ONU nesta OLT")
+    return ["end", "configure terminal", f"interface epon {pon}", f"no onu auth onuid {int(onu_id)}"]
+
+
+def delete_onu_vsol(
+    olt_ip: str, user: str, password: str, pon: str, onu_id: Any,
+    port: int = 22, timeout: float = 15.0,
+) -> Dict[str, Any]:
+    """Remove a autorizacao de uma ONU (nao apenas desconecta -- ver
+    build_delete_onu_vsol_command)."""
+    alvo = _rotulo_da_pon(pon)
+    if onu_id in ("", None):
+        return {"ok": False, "error": "onu_id e obrigatorio para excluir ONU nesta OLT"}
+
+    def tarefa(chan):
+        _entra_na_pon(chan, alvo, timeout=timeout)
+        saida = _manda(chan, f"no onu auth onuid {int(onu_id)}", ["config-pon"], timeout=timeout)
+        if _comando_falhou(saida):
+            return {"ok": False, "error": f"a OLT recusou excluir a ONU {onu_id}: {saida.strip()[:300]}"}
+        return {"ok": True, "pon": alvo, "onu_id": str(onu_id)}
+
+    return _com_sessao_vsol(olt_ip, user, password, port, timeout, tarefa)
 
 
 def _comando_falhou(saida: str) -> bool:
