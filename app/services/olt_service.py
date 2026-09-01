@@ -1272,6 +1272,54 @@ def find_onu(req: OltFindOnuRequest) -> Dict[str, Any]:
     return {"ok": True, **found}
 
 
+_ONU_TOPOLOGY_FIELDS = (
+    "pon", "onu_id", "onu_name", "onu_serial", "onu_model",
+    "onu_oper_status", "onu_omci_status", "onu_rx", "olt_rx",
+    "onu_telemetry_updated_at", "olt_ip", "olt_name", "vlan",
+)
+
+
+def _pon_num(value: Any) -> str:
+    """Normaliza '0/2', '2' ou 2 pro mesmo texto ('2') -- PON de driver EPON
+    (VSOL/4840E) vem formatado como slot/porta, GPON (8820i) vem numero
+    puro. Sem isso, comparar posicao entre os dois formatos nunca bate."""
+    text = _norm_text(value)
+    return text.split("/")[-1] if "/" in text else text
+
+
+def _clear_deleted_onu_from_camera_inventory(req: OltDeleteOnuRequest) -> Dict[str, Any]:
+    """Tira a topologia (PON/ONU/sinal) das cameras que ainda apontavam pra
+    uma ONU recem-excluida.
+
+    Sem isso a tela de Cameras IP mostra posicao e "ONU online" desatualizados
+    pra sempre: o merge do frontend (`cameras.js`) so ATUALIZA um campo quando
+    acha o MAC de novo do lado da OLT numa consulta nova -- nunca limpa
+    sozinho quando o MAC simplesmente some por a ONU ter sido excluida."""
+    pon_alvo = _pon_num(req.pon)
+    onu_alvo = _norm_text(req.onu)
+    if not pon_alvo or not onu_alvo:
+        return {"cleared": 0}
+
+    cameras = load_inventory_json(mode="olt") or []
+    changed = 0
+    for camera in cameras:
+        if _norm_text(camera.get("olt_ip")).lower() != _norm_text(req.olt_ip).lower():
+            continue
+        if _pon_num(camera.get("pon")) != pon_alvo or _norm_text(camera.get("onu_id")) != onu_alvo:
+            continue
+        camera_changed = False
+        for field in _ONU_TOPOLOGY_FIELDS:
+            if _norm_text(camera.get(field)):
+                camera[field] = ""
+                camera_changed = True
+        if camera_changed:
+            changed += 1
+
+    if changed:
+        save_inventory_json(cameras, mode="olt")
+    return {"cleared": changed}
+
+
 def delete_onu(req: OltDeleteOnuRequest) -> Dict[str, Any]:
     """Exclui uma ONU ja autorizada (posicao pon/onu) na OLT 8820i ou 4840E."""
     require_olt_capability(req, "delete_onu", "excluir ONU")
@@ -1298,6 +1346,7 @@ def delete_onu(req: OltDeleteOnuRequest) -> Dict[str, Any]:
                 )
             if result.get("ok"):
                 result["inventory"] = _remove_onu_inventory(req)
+                result["camera_topology"] = _clear_deleted_onu_from_camera_inventory(req)
             log_onu_action(
                 "delete_onu", olt_id=req.olt_id, olt_ip=req.olt_ip, site=req.site,
                 pon=req.pon, onu=req.onu, serial=req.serial, vlan=req.vlan_hint, ok=bool(result.get("ok")),
