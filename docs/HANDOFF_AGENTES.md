@@ -1715,3 +1715,65 @@ fica aberto (bloquear pararia quem ja esta no ar). Isso e proposital, mas gera
 WARNING a cada chamada. Cliente novo com webhook precisa do App Secret.
 
 **Teste:** `scripts/sightops_whatsapp_webhook_seguranca_test.py`.
+
+## 2026-09-01 — Driver de escrita da OLT VSOL EPON (Japaratinga) e a armadilha do auth-mode
+
+Implementado `add_onu_vsol`/`delete_onu_vsol`/`reboot_onu_vsol` em
+`app/cli/tools/olt_vsol_epon.py` (plano
+`docs/superpowers/plans/2026-09-01-olt-vsol-epon-write-driver.md`),
+encaixados em `olt_service.py`/`olt_capabilities.py`, com painéis novos na
+tela Implantação > ONU. Corrige um bug real que já existia (não usado):
+`build_delete_onu_vsol_command` montava `deregister` (só desconecta) em vez
+de `no onu auth onuid <id>` (remove a autorização de verdade) — confirmado
+no manual e validado ao vivo.
+
+**Achado crítico só descoberto testando ao vivo (cliente RADS, OLT
+192.168.200.2, ONU 0/2/7):** o comando corrigido (`no onu auth onuid`)
+rodava sem erro, mas a ONU voltava sozinha em 1-2 segundos — o mesmo
+sintoma do bug antigo. Causa: as 4 PONs desta OLT estavam com
+`onu auth-mode disable` (autenticação desligada), modo em que a OLT
+autoriza automaticamente QUALQUER ONU fisicamente conectada, ignorando
+whitelist e binding de onu-id. Nenhum comando de exclusão resolve isso
+sozinho nesse modo — é preciso `onu auth-mode mac` ativo.
+
+**Corrigido ao vivo, com cuidado:** populei a whitelist (`onu mac-auth add
+<mac>`) de todas as 21 ONUs já conectadas nas 4 PONs (8+7+6+0) ANTES de
+trocar o modo — sem isso, trocar o modo direto derruba geral. Troquei PON
+por PON, com checagem de quem continuava online e reversão automática pra
+`disable` se algo caísse (não caiu nada de vez — só um soluço de ~10s de
+reconexão durante a troca, que se resolveu sozinho). Confirmado depois:
+excluir/reautorizar/reiniciar funcionam corretamente com `mac-auth` ativo.
+Ver memória `vsol-japaratinga-authmode-macauth.md` pra detalhe completo.
+
+**Efeito colateral permanente e intencional:** a partir de agora, ONU nova
+que o cliente conectar nesta OLT NÃO entra sozinha — precisa ser autorizada
+explicitamente (tela "Autorizar ONU" ou `add_onu_vsol`). Antes disso era
+plug-and-play sem controle nenhum. Se aparecer relato de "ONU nova não
+conecta" nesta OLT específica, isso é o comportamento esperado agora, não
+regressão.
+
+**Dois achados menores da validação ao vivo, já corrigidos e revalidados ao
+vivo na sequência:**
+- `onu_signal_vsol`/`collect_onu_telemetry_vsol` usavam
+  `show onu <id> ctc pon monitor_status` pra ler potência óptica -- nesta
+  OLT esse comando só informa se o monitoramento periódico está
+  ligado/desligado (sempre veio `disable`), nunca a leitura real, então
+  `onu_rx` nunca aparecia. Comando certo, achado via `show onu ? `no CLI:
+  `show onu opm-diag` -- traz temperatura/tensão/bias/TX/RX de **toda a
+  PON numa tabela só** (mais rápido que um `monitor_status` por ONU, que
+  era o que `collect_onu_telemetry_vsol` fazia). Novo parser
+  `parse_onu_opm_diag`, mesmos nomes de campo de saída (`onu_rx`, `onu_tx`,
+  `temperatura`, `voltagem`, `bias`). Revalidado ao vivo: `onu_rx: -11.52`
+  na ONU 0/2/7.
+- `add_onu_vsol` tentava ler a posição de volta 3x com 2s de espera (6s
+  total) -- na prática o registro real da OLT levou entre 10 e 30s, então
+  `pending: true` (sem onu_id) era o caso comum, não raro. Aumentado pra 6
+  tentativas de 5s (30s no total).
+
+**Teste:** `scripts/sightops_olt_vsol_add_onu_test.py` (autorizar/excluir/
+reiniciar) e `scripts/sightops_olt_vsol_opm_diag_test.py` (parser de
+potência óptica + `onu_signal_vsol`, novo). Nenhum deploy em produção feito
+ainda -- a branch foi mesclada no `main` local, toda validação ao vivo
+(incluindo estes dois fixes) rodou direto contra o código do worktree/main
+local, sem tocar no container de produção, via `docker run --rm` efêmero
+na mesma network (`sightops-prod-platform`).

@@ -381,33 +381,34 @@ def _vlan_da_linha(linha: str, mac_bruto: str) -> str:
     return numeros[0] if len(numeros) == 1 else ""
 
 
-def parse_onu_optical(saida: str) -> Dict[str, Any]:
-    """Le `show onu <id> ctc pon monitor_status` (potencia optica).
+def parse_onu_opm_diag(saida: str) -> Dict[str, Dict[str, Any]]:
+    """Le `show onu opm-diag` -- potencia optica real de TODA a PON numa
+    tabela so (mais rapido que uma consulta por ONU, e o comando certo:
+    `show onu <id> ctc pon monitor_status`, usado antes, so informa se o
+    monitoramento periodico esta ligado/desligado, nunca a leitura real --
+    nesta OLT ele vem sempre 'disable', entao onu_rx nunca aparecia).
 
-    Os rotulos variam entre firmwares, entao a busca e por palavra-chave em vez
-    de posicao fixa de coluna.
+    Devolve um dict indexado por onu_id (string), cada valor com onu_rx,
+    onu_tx, temperatura, voltagem, bias -- mesmos nomes de campo que a
+    funcao antiga produzia, pra nao precisar mudar quem consome.
     """
-    dados: Dict[str, Any] = {}
+    dados: Dict[str, Dict[str, Any]] = {}
+    padrao = re.compile(
+        r"^EPON\S+:(\d+)\s+(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s+"
+        r"(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)"
+    )
     for bruta in (saida or "").splitlines():
-        linha = bruta.strip()
-        if ":" not in linha:
+        m = padrao.match(bruta.strip())
+        if not m:
             continue
-        rotulo, _, valor = linha.partition(":")
-        rot = rotulo.strip().lower()
-        num = re.search(r"-?\d+(?:\.\d+)?", valor)
-        if not num:
-            continue
-        v = num.group(0)
-        if "rx" in rot and "power" in rot:
-            dados["onu_rx"] = v
-        elif "tx" in rot and "power" in rot:
-            dados["onu_tx"] = v
-        elif "temp" in rot:
-            dados["temperatura"] = v
-        elif "voltage" in rot or "vcc" in rot:
-            dados["voltagem"] = v
-        elif "bias" in rot:
-            dados["bias"] = v
+        onu_id, temp, volt, bias, tx, rx = m.groups()
+        dados[onu_id] = {
+            "temperatura": temp,
+            "voltagem": volt,
+            "bias": bias,
+            "onu_tx": tx,
+            "onu_rx": rx,
+        }
     return dados
 
 
@@ -481,9 +482,12 @@ def add_onu_vsol(
     port: int = 22, timeout: float = 15.0,
 ) -> Dict[str, Any]:
     """Autoriza uma ONU pelo MAC (whitelist). A OLT atribui o onu-id sozinha
-    -- tenta ler de volta ('show onu auth-info') ate 3 vezes, 2s entre
-    tentativas, antes de desistir de informar a posicao. A autorizacao ja
-    aconteceu de qualquer jeito nesse caso; so a posicao fica pendente."""
+    -- tenta ler de volta ('show onu auth-info') ate 6 vezes, 5s entre
+    tentativas (30s no total), antes de desistir de informar a posicao.
+    Validado ao vivo (Japaratinga): o registro real da OLT levou entre 10 e
+    30s pra aparecer, entao uma janela curta deixava 'pending' aparecer
+    quase sempre. A autorizacao ja aconteceu de qualquer jeito nesse caso;
+    so a posicao fica pendente."""
     alvo = _rotulo_da_pon(pon)
     mac_norm = _norm_mac(mac)
     if not mac_norm:
@@ -496,8 +500,8 @@ def add_onu_vsol(
             return {"ok": False, "error": f"a OLT recusou autorizar o MAC {mac_norm}: {saida.strip()[:300]}"}
 
         onu_id = ""
-        for _ in range(3):
-            time.sleep(2)
+        for _ in range(6):
+            time.sleep(5)
             auth = _manda(chan, "show onu auth-info", ["config-pon"], timeout=max(20.0, timeout))
             achado = next(
                 (l for l in parse_onu_auth_info(auth) if _norm_mac(l.get("onu_mac")) == mac_norm),
@@ -696,24 +700,20 @@ def collect_onu_telemetry_vsol(
 ) -> List[Dict[str, Any]]:
     """Telemetria por ONU: estado, distancia e potencia optica.
 
-    O sinal exige uma consulta por ONU (`show onu <id> ctc pon monitor_status`).
-    Com 21 ONUs isso e rapido; se a OLT crescer, e aqui que o tempo sobe.
-    ONU offline nao e consultada: nao ha luz para medir, e a consulta so
-    gastaria o timeout.
+    O sinal vem de `show onu opm-diag`, uma consulta so por PON (traz todas
+    as ONUs online de uma vez) -- mais rapido que consultar ONU por ONU.
     """
     def tarefa(chan):
         saida: List[Dict[str, Any]] = []
         for alvo in _pons_existentes(chan, pon, timeout=timeout):
+            try:
+                bruto_pon = _manda(chan, "show onu opm-diag", ["config-pon"], timeout=max(20.0, timeout * 2))
+                opticos_pon = parse_onu_opm_diag(bruto_pon)
+            except Exception:
+                opticos_pon = {}     # PON que nao responde nao derruba a coleta
             for linha in _le_pon(chan, alvo, timeout=timeout):
                 up = linha.get("oper_status") == "up"
-                optico = {}
-                if up:
-                    try:
-                        bruto = _manda(chan, "show onu %s ctc pon monitor_status" % linha["onu_id"],
-                                       ["config-pon"], timeout=max(20.0, timeout * 2))
-                        optico = parse_onu_optical(bruto)
-                    except Exception:
-                        optico = {}      # ONU que nao responde nao derruba a coleta
+                optico = opticos_pon.get(str(linha.get("onu_id") or ""), {}) if up else {}
                 try:
                     pon_num = int(str(linha["pon"]).split("/")[-1])
                 except (ValueError, IndexError):
@@ -784,9 +784,9 @@ def onu_signal_vsol(
 
     def tarefa(chan):
         _entra_na_pon(chan, alvo, timeout=timeout)
-        bruto = _manda(chan, "show onu %d ctc pon monitor_status" % int(onu_id),
-                       ["config-pon"], timeout=max(20.0, timeout * 2))
-        dados = parse_onu_optical(bruto)
+        bruto = _manda(chan, "show onu opm-diag", ["config-pon"], timeout=max(20.0, timeout * 2))
+        opticos = parse_onu_opm_diag(bruto)
+        dados = dict(opticos.get(str(onu_id), {}))
         atual = next((l for l in _le_pon(chan, alvo, timeout=timeout)
                       if str(l.get("onu_id")) == str(onu_id)), {})
         dados.update({

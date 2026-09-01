@@ -95,8 +95,8 @@ def falhas() -> list[str]:
     if r.get("onu_id") not in ("", None):
         erros.append(f"registro pendente: onu_id={r.get('onu_id')!r}, esperava vazio")
     tentativas_auth_info = sum(1 for c in canal.comandos if c == "show onu auth-info")
-    if tentativas_auth_info != 3:
-        erros.append(f"registro pendente: esperava 3 tentativas de 'show onu auth-info', veio {tentativas_auth_info}")
+    if tentativas_auth_info != 6:
+        erros.append(f"registro pendente: esperava 6 tentativas de 'show onu auth-info', veio {tentativas_auth_info}")
 
     # 4) MAC normalizado (maiusculo/hifen) antes de mandar pra OLT e antes de comparar
     canal = CanalFalso(AUTH_INFO_COM_NOVA_ONU)
