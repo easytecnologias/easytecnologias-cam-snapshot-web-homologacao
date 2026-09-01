@@ -1174,6 +1174,12 @@ def add_onu(req: OltAddOnuRequest) -> Dict[str, Any]:
                     pon=result.get("pon"), onu=result.get("onu") or result.get("slot"), serial=req.serial, vlan=vlan_summary, ok=True,
                     detail=req.onu_model,
                 )
+            else:
+                log_onu_action(
+                    "add_onu", olt_id=req.olt_id, olt_ip=req.olt_ip, olt_name=req.olt_name, site=req.site,
+                    pon=result.get("pon") or req.pon, onu=result.get("onu") or result.get("slot"), serial=req.serial, vlan=vlan_summary, ok=False,
+                    detail=result.get("error"),
+                )
             return result
         except (OnuAddError, Olt4840eAddOnuError) as e:
             log_onu_action(
