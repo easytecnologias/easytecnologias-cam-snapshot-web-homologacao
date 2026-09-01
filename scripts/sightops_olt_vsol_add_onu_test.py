@@ -143,6 +143,29 @@ def falhas() -> list[str]:
     if r.get("ok"):
         erros.append("delete_onu_vsol: OLT recusou o comando, mas devolveu ok=True")
 
+    # 9) reboot_onu_vsol feliz
+    canal = CanalFalso(AUTH_INFO_COM_NOVA_ONU)
+    _instala_sessao_falsa(canal)
+    r = vsol.reboot_onu_vsol("192.168.200.2", "admin", "x", pon="0/1", onu_id=9)
+    if not r.get("ok"):
+        erros.append(f"reboot_onu_vsol: ok=False, esperava True ({r})")
+    if not any(c == "onu 9 ctc reset" for c in canal.comandos):
+        erros.append(f"reboot_onu_vsol: nao mandou 'onu 9 ctc reset', comandos={canal.comandos}")
+
+    # 10) reboot_onu_vsol com erro da OLT
+    class CanalFalsoRebootErro(CanalFalso):
+        def resposta(self, cmd: str) -> str:
+            self.comandos.append(cmd)
+            if cmd == "onu 9 ctc reset":
+                return "% invalid parameter\nepon-olt(config-pon-0/1)#"
+            return super().resposta(cmd)
+
+    canal = CanalFalsoRebootErro(AUTH_INFO_COM_NOVA_ONU)
+    _instala_sessao_falsa(canal)
+    r = vsol.reboot_onu_vsol("192.168.200.2", "admin", "x", pon="0/1", onu_id=9)
+    if r.get("ok"):
+        erros.append("reboot_onu_vsol: OLT recusou o comando, mas devolveu ok=True")
+
     return erros
 
 

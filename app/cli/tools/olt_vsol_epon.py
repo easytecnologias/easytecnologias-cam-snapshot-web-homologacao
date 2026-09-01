@@ -449,6 +449,26 @@ def delete_onu_vsol(
     return _com_sessao_vsol(olt_ip, user, password, port, timeout, tarefa)
 
 
+def reboot_onu_vsol(
+    olt_ip: str, user: str, password: str, pon: str, onu_id: Any,
+    port: int = 22, timeout: float = 15.0,
+) -> Dict[str, Any]:
+    """Reinicia uma ONU ja autorizada. Diferente da 4840E, esta OLT nao pede
+    confirmacao y/n pra este comando (a confirmar ao vivo antes de producao)."""
+    alvo = _rotulo_da_pon(pon)
+    if onu_id in ("", None):
+        return {"ok": False, "error": "onu_id e obrigatorio para reiniciar ONU nesta OLT"}
+
+    def tarefa(chan):
+        _entra_na_pon(chan, alvo, timeout=timeout)
+        saida = _manda(chan, f"onu {int(onu_id)} ctc reset", ["config-pon"], timeout=timeout)
+        if _comando_falhou(saida):
+            return {"ok": False, "error": f"a OLT recusou reiniciar a ONU {onu_id}: {saida.strip()[:300]}"}
+        return {"ok": True, "pon": alvo, "onu_id": str(onu_id)}
+
+    return _com_sessao_vsol(olt_ip, user, password, port, timeout, tarefa)
+
+
 def _comando_falhou(saida: str) -> bool:
     """Mesmo criterio de erro ja usado em _entra_na_pon, como funcao
     reutilizavel para os comandos novos de autorizar/excluir/reiniciar."""
