@@ -76,6 +76,47 @@ def _instala_sessao_falsa(canal: CanalFalso) -> None:
     vsol._com_sessao_vsol = lambda ip, u, p, port, timeout, tarefa: tarefa(canal)
 
 
+OPM_DIAG_PON02 = (
+    "show onu opm-diag\r\n\r\n"
+    "ONU-ID      Temperature(C)    Supply Voltage(V)   TX Bias Current(mA)   TX Power(dBm)   RX Power(dBm)\r\n"
+    "------      --------------    -----------------   -------------------   -------------   -------------\r\n"
+    "EPON0/2:1   40.00             3.20                14.00                 5.00            -12.34\r\n"
+    "epon-olt(config-pon-0/2)# "
+)
+
+AUTH_INFO_PON02 = """show onu auth-info
+ONU-ID      LLID   Status    MAC  Address         RTT(TQ) Description
+EPON0/2:1   1      online    11:22:33:44:55:66   500     N/A
+epon-olt(config-pon-0/2)#"""
+
+
+class CanalFalsoComContexto:
+    """Rastreia a PON atual (como a OLT faria) pra responder 'show onu
+    opm-diag' com a tabela certa -- pega o bug real de 2026-09-01: a
+    primeira versao de collect_onu_telemetry_vsol consultava opm-diag ANTES
+    de entrar na PON de cada iteracao, entao a 2a PON em diante lia a
+    tabela da PON anterior (ou nenhuma)."""
+
+    def __init__(self) -> None:
+        self.pon_atual = ""
+        self.comandos: list[str] = []
+        self.tabelas = {"0/1": OPM_DIAG_PON01, "0/2": OPM_DIAG_PON02}
+        self.auths = {"0/1": AUTH_INFO_PON01, "0/2": AUTH_INFO_PON02}
+
+    def resposta(self, cmd: str) -> str:
+        self.comandos.append(cmd)
+        if cmd.startswith("interface epon"):
+            self.pon_atual = cmd.split()[-1]
+            return "epon-olt(config-pon-%s)#" % self.pon_atual
+        if cmd == "show onu opm-diag":
+            return self.tabelas.get(self.pon_atual, "epon-olt#")
+        if cmd == "show onu auth-info":
+            return self.auths.get(self.pon_atual, "epon-olt#")
+        if cmd == "show onu basic-info":
+            return "show onu basic-info\r\nepon-olt(config-pon-%s)#" % self.pon_atual
+        return "epon-olt#"
+
+
 def falhas() -> list[str]:
     erros: list[str] = []
 
@@ -129,6 +170,26 @@ def falhas() -> list[str]:
         erros.append(f"onu_signal_vsol: ONU offline nao deveria ter macs, veio {r.get('macs')}")
     if any("mac-address-table" in c for c in canal.comandos):
         erros.append(f"onu_signal_vsol: consultou mac-address-table de ONU offline, comandos={canal.comandos}")
+
+    # 6) collect_onu_telemetry_vsol com 2 PONs: cada PON tem que ler a sua
+    #    PROPRIA tabela de opm-diag, nao a da PON anterior (achado ao vivo
+    #    em Japaratinga: sem entrar na PON antes do opm-diag, so 10 de 21
+    #    ONUs vinham com sinal)
+    canal = CanalFalsoComContexto()
+    vsol._manda = lambda chan, texto, alvos, timeout=20.0: chan.resposta(texto)
+    vsol._espera_prompt = lambda chan, alvos, timeout=20.0: "epon-olt#"
+    vsol._volta_ao_topo = lambda chan, timeout=20.0: None
+    vsol._com_sessao_vsol = lambda ip, u, p, port, timeout, tarefa: tarefa(canal)
+    vsol._pons_existentes = lambda chan, pon, maximo=8, timeout=15.0: ["0/1", "0/2"]
+
+    linhas = vsol.collect_onu_telemetry_vsol("192.168.200.2", "admin", "x", pon="all")
+    por_posicao = {(l["pon"], l["onu_id"]): l for l in linhas}
+    onu_p1 = por_posicao.get((1, 2), {})
+    onu_p2 = por_posicao.get((2, 1), {})
+    if onu_p1.get("rx_onu") != "-10.74":
+        erros.append(f"collect_onu_telemetry_vsol: PON 0/1 ONU 2 esperava rx_onu '-10.74', veio {onu_p1.get('rx_onu')!r} -- sinal de PON errada")
+    if onu_p2.get("rx_onu") != "-12.34":
+        erros.append(f"collect_onu_telemetry_vsol: PON 0/2 ONU 1 esperava rx_onu '-12.34', veio {onu_p2.get('rx_onu')!r} -- sinal de PON errada (bug de contexto)")
 
     return erros
 

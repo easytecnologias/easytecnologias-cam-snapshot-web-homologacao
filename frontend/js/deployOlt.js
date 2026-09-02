@@ -238,12 +238,13 @@ function oltRegOpenMenu(event, id, trigger) {
   menu.innerHTML = `
     <button type="button" data-action="test"><i data-lucide="plug-zap"></i><span>Testar conexao</span></button>
     <button type="button" data-action="sync"><i data-lucide="refresh-cw"></i><span>Sincronizar inventario</span></button>
+    <button type="button" data-action="telemetry"><i data-lucide="activity"></i><span>Atualizar telemetria</span></button>
     <button type="button" data-action="edit"><i data-lucide="pencil"></i><span>Editar</span></button>
     <button type="button" class="danger" data-action="delete"><i data-lucide="trash-2"></i><span>Excluir</span></button>`;
   document.body.appendChild(menu);
   const rect = trigger.getBoundingClientRect();
   const menuWidth = 220;
-  const menuHeight = 184;
+  const menuHeight = 230;
   const left = Math.max(8, Math.min(window.innerWidth - menuWidth - 8, rect.right - menuWidth));
   const top = rect.bottom + menuHeight + 8 <= window.innerHeight
     ? rect.bottom + 6
@@ -256,6 +257,7 @@ function oltRegOpenMenu(event, id, trigger) {
     oltRegCloseMenus();
     if (action === 'test') oltRegTest(id);
     if (action === 'sync') oltRegSync(id);
+    if (action === 'telemetry') oltRegTelemetry(id);
     if (action === 'edit') oltRegEdit(id);
     if (action === 'delete') oltRegDelete(id);
   });
@@ -390,6 +392,31 @@ async function _oltRegRequestSync(oltId) {
   return _oltRegAwaitSync(oltId, initial);
 }
 
+async function _oltRegAwaitTelemetry(oltId, initial) {
+  if (!initial?.accepted || initial?.status !== 'running') return initial;
+  const started = Date.now();
+  while (Date.now() - started < 30 * 60 * 1000) {
+    await new Promise(resolve => setTimeout(resolve, 2000));
+    const state = await jsonOrReadableError(
+      await api(`/api/olt/registry/${Number(oltId)}/telemetry-status`),
+      'Nao foi possivel acompanhar a coleta de telemetria.'
+    );
+    if (state?.status === 'done') return state;
+    if (state?.status === 'error') throw new Error(state?.error || 'A coleta de telemetria falhou.');
+    const elapsed = Number(state?.elapsed_s || Math.floor((Date.now() - started) / 1000));
+    _oltRegSetStatus(`Coletando telemetria em segundo plano... ${elapsed}s. Pode manter esta tela aberta.`);
+  }
+  throw new Error('A coleta de telemetria continua em segundo plano, mas excedeu o tempo de acompanhamento da tela.');
+}
+
+async function _oltRegRequestTelemetry(oltId) {
+  const initial = await jsonOrReadableError(
+    await api(`/api/olt/registry/${Number(oltId)}/telemetry`, { method: 'POST' }),
+    'Nao foi possivel iniciar a coleta de telemetria.'
+  );
+  return _oltRegAwaitTelemetry(oltId, initial);
+}
+
 function _oltRegValidate(payload) {
   if (!payload.name) { showToast('Informe o nome da OLT.', true); return false; }
   if (!payload.host) { showToast('Informe o IP da OLT.', true); return false; }
@@ -495,6 +522,25 @@ async function oltRegSync(id) {
     _oltRegSyncProgress(olt, 'error', err);
     _oltRegSetStatus(`Falha na sincronizacao: ${err?.message || err}`, true);
     showToast(`Falha na sincronizacao: ${err?.message || err}`, true);
+  } finally {
+    _oltRegSyncStates.delete(Number(id));
+    _oltRegRender();
+  }
+}
+
+async function oltRegTelemetry(id) {
+  const olt = _oltRegRows.find(item => Number(item.id) === Number(id));
+  if (!olt || _oltRegSyncStates.get(Number(id))?.kind === 'loading') return;
+  _oltRegSyncStates.set(Number(id), { kind: 'loading' });
+  _oltRegRender();
+  _oltRegSetStatus('Consultando sinal/status de todas as ONUs da OLT...');
+  try {
+    const result = await _oltRegRequestTelemetry(id);
+    _oltRegSetStatus(`Telemetria atualizada: ${Number(result?.onus || 0)} ONU(s) lida(s), ${Number(result?.with_signal || 0)} com sinal.`, false, true);
+    showToast('Telemetria da OLT atualizada.');
+  } catch (err) {
+    _oltRegSetStatus(`Falha ao coletar telemetria: ${err?.message || err}`, true);
+    showToast(`Falha ao coletar telemetria: ${err?.message || err}`, true);
   } finally {
     _oltRegSyncStates.delete(Number(id));
     _oltRegRender();

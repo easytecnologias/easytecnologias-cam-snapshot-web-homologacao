@@ -707,6 +707,7 @@ def collect_onu_telemetry_vsol(
         saida: List[Dict[str, Any]] = []
         for alvo in _pons_existentes(chan, pon, timeout=timeout):
             try:
+                _entra_na_pon(chan, alvo, timeout=timeout)
                 bruto_pon = _manda(chan, "show onu opm-diag", ["config-pon"], timeout=max(20.0, timeout * 2))
                 opticos_pon = parse_onu_opm_diag(bruto_pon)
             except Exception:

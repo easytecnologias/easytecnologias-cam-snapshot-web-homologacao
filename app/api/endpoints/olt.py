@@ -40,9 +40,15 @@ from app.services.onu_action_log import list_onu_actions
 router = APIRouter(prefix="/api", tags=["olt"])
 _olt_sync_jobs: dict[str, dict[str, Any]] = {}
 _olt_sync_tasks: set[asyncio.Task[Any]] = set()
+_olt_telemetry_jobs: dict[str, dict[str, Any]] = {}
+_olt_telemetry_tasks: set[asyncio.Task[Any]] = set()
 
 
 def _olt_sync_key(olt_id: int) -> str:
+    return f"{get_current_tenant_slug() or 'default'}:{int(olt_id)}"
+
+
+def _olt_telemetry_key(olt_id: int) -> str:
     return f"{get_current_tenant_slug() or 'default'}:{int(olt_id)}"
 
 
@@ -61,6 +67,30 @@ async def _run_olt_registry_sync(job_key: str, job_id: str, olt_id: int, req: Ol
     except Exception as exc:
         detail = getattr(exc, "detail", None) or str(exc)
         _olt_sync_jobs[job_key] = {
+            "ok": False,
+            "job_id": job_id,
+            "olt_id": olt_id,
+            "status": "error",
+            "error": str(detail),
+            "finished_at": time.time(),
+        }
+
+
+async def _run_olt_registry_telemetry(job_key: str, job_id: str, olt_id: int, req: OltCollectMacsRequest) -> None:
+    try:
+        result = await asyncio.to_thread(collect_onu_telemetry, req)
+        _olt_telemetry_jobs[job_key] = {
+            "ok": True,
+            "job_id": job_id,
+            "olt_id": olt_id,
+            "status": "done",
+            "onus": int(result.get("onus") or 0),
+            "with_signal": int(result.get("with_signal") or 0),
+            "finished_at": time.time(),
+        }
+    except Exception as exc:
+        detail = getattr(exc, "detail", None) or str(exc)
+        _olt_telemetry_jobs[job_key] = {
             "ok": False,
             "job_id": job_id,
             "olt_id": olt_id,
@@ -244,11 +274,41 @@ def api_olt_registry_sync_status(olt_id: int) -> Dict[str, Any]:
 
 
 @router.post("/olt/registry/{olt_id}/telemetry")
-def api_olt_registry_telemetry(olt_id: int) -> Dict[str, Any]:
+async def api_olt_registry_telemetry(olt_id: int) -> Dict[str, Any]:
     _ensure_supported_registry_driver(olt_id)
     req = _registered_request(OltCollectMacsRequest(olt_id=olt_id, pon="all", reuse_json=False))
     req = req.model_copy(update={"scan_origin": "connector" if req.connector_id else "local"})
-    return collect_onu_telemetry(req)
+    job_key = _olt_telemetry_key(olt_id)
+    current = _olt_telemetry_jobs.get(job_key) or {}
+    if current.get("status") == "running":
+        return {**current, "accepted": True}
+    job_id = uuid.uuid4().hex
+    _olt_telemetry_jobs[job_key] = {
+        "ok": True,
+        "accepted": True,
+        "job_id": job_id,
+        "olt_id": olt_id,
+        "status": "running",
+        "started_at": time.time(),
+    }
+    task = asyncio.create_task(
+        _run_olt_registry_telemetry(job_key, job_id, olt_id, req),
+        name=f"olt-telemetry-{olt_id}-{job_id[:8]}",
+    )
+    _olt_telemetry_tasks.add(task)
+    task.add_done_callback(_olt_telemetry_tasks.discard)
+    return dict(_olt_telemetry_jobs[job_key])
+
+
+@router.get("/olt/registry/{olt_id}/telemetry-status")
+def api_olt_registry_telemetry_status(olt_id: int) -> Dict[str, Any]:
+    job = _olt_telemetry_jobs.get(_olt_telemetry_key(olt_id))
+    if not job:
+        return {"ok": True, "olt_id": olt_id, "status": "idle"}
+    result = dict(job)
+    if result.get("status") == "running":
+        result["elapsed_s"] = max(0, int(time.time() - float(result.get("started_at") or time.time())))
+    return result
 
 
 # --- Operacoes ---------------------------------------------------------------
