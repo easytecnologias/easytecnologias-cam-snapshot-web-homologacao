@@ -1822,10 +1822,39 @@ tela (não no driver isolado):**
   ponta a ponta contra o formato "0/N"). Teste:
   `scripts/sightops_olt_delete_clears_camera_topology_test.py`.
 
-**Deploy feito em produção (v2 e v3) em 2026-09-01**, imagem final
-`sightops-prod-api:20260901-vsol-camclear` (5 camadas em cima da base:
+**Achado maior, fora do escopo do driver VSOL: telemetria de OLT nunca
+tinha botão nenhum.** Usuário reportou "a telemetria das OLTs eu nunca
+acho que elas funcionam de verdade" -- rastreado até a causa: `collect_onu_telemetry`
+(dispatcher em `app/services/olt_service.py`, com versão própria pra
+vsol/4840e/8820i, todas gravando certo no inventário) sempre existiu e
+sempre funcionou -- mas o único endpoint que a chama
+(`POST /olt/registry/{id}/telemetry`) **não tinha nenhum botão no
+frontend**. Nunca era executado, em produção, desde que foi escrita. O que
+aparecia de sinal na tela vinha só do "Consultar sinal" manual (Implantação
+> ONU, uma ONU de cada vez -- e só grava no inventário pra GPON/8820i,
+EPON fica de fora por causa do formato "0/N" de PON).
+
+Adicionado "Atualizar telemetria" no menu de ações da OLT
+(`frontend/js/deployOlt.js`), mesmo padrão assíncrono já usado por
+"Sincronizar inventário": `POST /olt/registry/{id}/telemetry` cria um job
+em background, `GET .../telemetry-status` faz o polling -- pra não travar
+a tela numa OLT com muitas ONUs.
+
+**Achado bônus corrigindo isso**: `collect_onu_telemetry_vsol` (a versão
+que passou a usar `opm-diag` ontem) tinha um bug de ordem -- consultava
+`show onu opm-diag` ANTES de entrar na PON de cada iteração do laço, então
+da 2ª PON em diante lia a tabela da PON anterior (ou nenhuma). Corrigido
+com `_entra_na_pon` antes da consulta. Validado ao vivo: `with_signal` foi
+de 10/21 pra 18/21 (bate exato com as 3 ONUs offline nesta OLT). Teste
+novo: `scripts/sightops_olt_vsol_opm_diag_test.py`, caso 6 -- usa um canal
+falso que rastreia a PON atual de verdade (`CanalFalsoComContexto`) em vez
+de responder por texto solto, porque o padrão de teste anterior não pegava
+bug de ORDEM de comando, só de conteúdo.
+
+**Deploy feito em produção (v2 e v3) em 2026-09-01/02**, imagem final
+`sightops-prod-api:20260901-vsol-telemetry` (6 camadas em cima da base:
 `vsol-write` -> `vsol-discover` -> `vsol-syncfix` -> `vsol-macs` ->
-`vsol-camclear`), construída em
+`vsol-camclear` -> `vsol-telemetry`), construída em
 `/home/central/sightops-prod-release/build-api-vsol/` (novo diretório --
 o `build-api/` antigo tinha um `Dockerfile` com `FROM` apontando pra uma
 tag velha, `20260820-tgolt`, e um `maintenance.py` com 612 linhas de drift
