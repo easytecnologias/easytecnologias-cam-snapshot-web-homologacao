@@ -249,7 +249,11 @@ async def _olt_telemetry_loop() -> None:
                     tenant_results = []
                     for olt in olts:
                         try:
-                            tenant_results.append(await asyncio.to_thread(api_olt_registry_telemetry, int(olt["id"])))
+                            # api_olt_registry_telemetry virou async (cria um job em
+                            # background e devolve na hora, sem bloquear) -- rodar via
+                            # to_thread so criava a corrotina sem nunca executar ela, o
+                            # loop automatico nunca coletava nada de verdade.
+                            tenant_results.append(await api_olt_registry_telemetry(int(olt["id"])))
                         except Exception as exc:
                             tenant_results.append({"ok": False, "olt_id": olt.get("id"), "error": str(exc)})
                     results[tenant_slug] = tenant_results
