@@ -1868,3 +1868,46 @@ preservando tudo que já existia e só acrescentando os três `elif
 _is_vsol(req):` que faltavam. `.env.production` e `.env.v3` atualizados
 com a tag nova. Frontend copiado com backup (`.bak-vsolwrite-20260901`) em
 ambos os `frontend/` de release.
+
+## 2026-09-04 — Loop automático de telemetria de OLT estava morto desde o deploy de ontem
+
+`app/main.py` já tinha `_olt_telemetry_loop` (roda a cada
+`SIGHTOPS_OLT_TELEMETRY_INTERVAL`, chama `api_olt_registry_telemetry` pra
+cada OLT de cada tenant) e `_monitoring_refresh_loop` (chama
+`sync_monitoring_to_zabbix`, que cria um item `sightops.status` por ONU no
+Zabbix) -- pipeline completo de coleta + notificação, nenhum dos dois
+escrito hoje. O problema: em 2026-09-01/02
+`api_olt_registry_telemetry` (`app/api/endpoints/olt.py`) virou `async def`
+pra criar um job em background e devolver na hora, sem travar o botão
+manual "Atualizar telemetria" -- mas `_olt_telemetry_loop` continuava
+chamando ela via `asyncio.to_thread`, que só cria o objeto corrotina dentro
+da thread, nunca executa. Sem erro nenhum no log: o loop automático rodava
+"sem falhar" e nunca coletava nada de verdade.
+
+**Corrigido**: `await api_olt_registry_telemetry(...)` direto (a função já
+não bloqueia, não precisa mais de thread). Intervalo ajustado pra 1h
+(`SIGHTOPS_OLT_TELEMETRY_INTERVAL=3600` -- variável nova, nunca existia
+antes). Validado ao vivo contra a OLT de Perucaba (10.80.80.5): 3 minutos
+depois do deploy, sem nenhum clique manual, `telemetry_updated_at`
+atualizou sozinho. Teste:
+`scripts/sightops_olt_telemetry_loop_asyncio_bug_test.py` (reproduz o
+padrão do bug com uma função de exemplo).
+
+**Armadilha nova, achada no caminho**: a imagem `sightops-prod-api` empilha
+uma camada nova por fix há semanas sem nunca compactar -- bateu 140
+camadas e o build travou com `max depth exceeded`. Achatei com `docker
+export`/`import` antes de continuar (ver memória
+`sightops-imagem-docker-limite-camadas` -- `docker import` não preserva
+`CMD`/`WORKDIR`/`EXPOSE`, precisa redeclarar na mão no Dockerfile
+seguinte). **Deploy de env var nova** (`SIGHTOPS_OLT_TELEMETRY_INTERVAL`)
+também não é trivial: `deploy_api.py`/`deploy_api_v3.py` clonam o `Env` do
+container que já está rodando (`docker inspect`), nunca releem
+`.env.production` -- só editar o `.env` não muda nada num redeploy normal.
+Usei uma cópia com um parâmetro `extra_env` a mais em `montar_create`, só
+pra essa publicação (os scripts originais não foram tocados).
+
+**O que falta, fora do SightOps**: confirmar dentro do próprio Zabbix se
+existe um Trigger configurado em cima do item `sightops.status` que dispara
+uma notificação de verdade (e-mail/WhatsApp/etc via Zabbix Actions) quando
+uma ONU cai -- o item chega certo agora, mas isso sozinho não notifica
+ninguém sem trigger+action configurados do lado de lá.
