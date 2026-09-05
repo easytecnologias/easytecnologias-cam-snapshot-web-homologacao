@@ -238,7 +238,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const item = deployStandaloneRecorderChannelsFromProbe(_deployStandaloneRecorderProbe).find(row => Number(row.channel) === _deployRecorderSelectedChannel);
       if (channelAction === 'close') { _deployRecorderSelectedChannel = 0; deployRenderStandaloneRecorderChannels(); return; }
       if (channelAction === 'refresh') { deployStandaloneRecorderLogin(); return; }
-      if (channelAction === 'web' && item?.camera_ip) { window.open(`http://${item.camera_ip}`, '_blank', 'noopener'); return; }
+      if (channelAction === 'web' && item?.camera_ip) { window.open(`${API_BASE}/api/maintenance/web/${encodeURIComponent(item.camera_ip)}/`, '_blank', 'noopener'); return; }
       if (channelAction === 'ping' && item?.camera_ip) { openPingTerminal(item.camera_ip); return; }
       if (channelAction === 'delete' && item?.used) { deployStandaloneRecorderDeleteChannel(item); return; }
       if (channelAction === 'add') { navigateTo('deploy-new'); return; }

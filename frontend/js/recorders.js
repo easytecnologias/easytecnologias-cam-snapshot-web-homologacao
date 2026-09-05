@@ -752,7 +752,7 @@ async function runRecAction() {
 
 function recPanelAction(action) {
   if (!_recActive) return;
-  if (action === 'web') { window.open(`http://${_recActive.host}`, '_blank'); return; }
+  if (action === 'web') { window.open(`${API_BASE}/api/maintenance/web/${encodeURIComponent(_recActive.host)}/`, '_blank'); return; }
   if (action === 'ping') { openPingTerminal(_recActive.host); return; }
   openRecAction(action);
 }
