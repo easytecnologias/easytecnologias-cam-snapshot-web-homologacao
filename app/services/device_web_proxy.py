@@ -57,9 +57,13 @@ def build_target_url(scheme: str, host: str, path: str, query: str, http_port: i
 
 def _tentar_schemes(host: str) -> Tuple[str, ...]:
     lembrado = _scheme_cache.get(host)
-    if lembrado == "http":
-        return ("http", "https")
-    return ("https", "http")
+    if lembrado == "https":
+        return ("https", "http")
+    # http primeiro por padrao: a grande maioria das cameras/DVRs de CFTV
+    # vem de fabrica com HTTPS desativado, entao sondar https as cegas
+    # antes so custa tempo no caso comum. So inverte a ordem quando este
+    # host especifico ja provou que fala https.
+    return ("http", "https")
 
 
 def fetch_device(
@@ -75,8 +79,9 @@ def fetch_device(
     http_port: int = 80,
     timeout: Tuple[float, float] = (4.0, 25.0),
 ) -> requests.Response:
-    """Fala com o equipamento, tentando HTTPS e HTTP (o que ja funcionou da
-    ultima vez primeiro), e credencial Basic/Digest quando ha senha salva.
+    """Fala com o equipamento, tentando HTTP e HTTPS (o que ja funcionou da
+    ultima vez primeiro; por padrao HTTP, que e o caso comum), e credencial
+    Basic/Digest quando ha senha salva.
 
     So cai pro proximo esquema quando a CONEXAO falha (equipamento nao
     escuta naquela porta/protocolo) -- erro HTTP normal do proprio
@@ -92,13 +97,13 @@ def fetch_device(
 
     try:
         schemes = _tentar_schemes(host)
-        for indice, scheme in enumerate(schemes):
+        for scheme in schemes:
             url = build_target_url(scheme, host, path, query, http_port)
-            # so e "as cegas" se ainda nao ha certeza nenhuma sobre este
-            # scheme (nem em cache) e ainda sobra outro esquema pra tentar
-            # depois -- a ultima tentativa da lista sempre usa o timeout
-            # normal, e a que ja bateu com o cache tambem.
-            eh_as_cegas = scheme != _scheme_cache.get(host) and indice < len(schemes) - 1
+            # a tentativa "as cegas" e sempre a de https, a nao ser que
+            # este host especifico ja tenha provado que fala https -- http
+            # e o caso comum (a maioria das cameras vem com https
+            # desativado de fabrica) e sempre usa o timeout normal.
+            eh_as_cegas = scheme == "https" and _scheme_cache.get(host) != "https"
             tentativa_timeout = (_PROBE_CONNECT_TIMEOUT, timeout[1]) if eh_as_cegas else timeout
             try:
                 resposta = requests.request(
