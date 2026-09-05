@@ -19,6 +19,7 @@ from app.api.endpoints.maintenance import (
 # o proxy pra abrir a camera -- ou qualquer servico HTTP privado -- de OUTRO
 # cliente so sabendo o IP). Esse teste e sobre construcao de URL/reescrita de
 # HTML, nao sobre a checagem de posse em si, entao ela e substituida aqui.
+_ip_belongs_to_current_tenant_original = maintenance._ip_belongs_to_current_tenant
 maintenance._ip_belongs_to_current_tenant = lambda ip: True
 
 
@@ -80,6 +81,7 @@ def main() -> None:
     # --- host de DVR/NVR (sem estar no inventario de camera) tambem e
     #     aceito pela checagem de posse, e host de nenhum dos dois inventarios
     #     continua bloqueado
+    maintenance._ip_belongs_to_current_tenant = _ip_belongs_to_current_tenant_original
     maintenance._ip_in_inventory = lambda ip: False
     maintenance._host_in_recorder_inventory = lambda ip: True
     assert_true(maintenance._ip_belongs_to_current_tenant("10.50.11.2"), "host de DVR/NVR deveria ser aceito")
