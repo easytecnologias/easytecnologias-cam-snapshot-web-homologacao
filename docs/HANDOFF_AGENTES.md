@@ -2130,3 +2130,65 @@ existe um Trigger configurado em cima do item `sightops.status` que dispara
 uma notificação de verdade (e-mail/WhatsApp/etc via Zabbix Actions) quando
 uma ONU cai -- o item chega certo agora, mas isso sozinho não notifica
 ninguém sem trigger+action configurados do lado de lá.
+
+## 2026-09-05 (noite) — Botão "Web" da câmera travava a API inteira; incidente próprio na publicação
+
+Usuário reclamou que entrar numa câmera pelo botão "Web" (proxy criado mais
+cedo no mesmo dia) demorava bastante. Causa real, achada lendo o código:
+`maintenance_camera_web_proxy` (`app/api/endpoints/maintenance.py`) chamava
+`fetch_device` (`app/services/device_web_proxy.py`, `requests.request`
+síncrono) direto dentro de uma rota `async def`, sem `asyncio.to_thread` --
+travava a única thread do event loop pela duração inteira de cada chamada
+de rede. Como uvicorn roda com 1 worker em produção, isso não travava só
+aquela câmera: **travava a API inteira, para todo cliente**, enquanto um
+técnico qualquer estava com a página de uma câmera aberta (ela carrega
+vários sub-recursos JS/CSS/imagem, cada um serializando tudo mais atrás).
+
+**Corrigido**: `await asyncio.to_thread(fetch_device, ...)`. Além disso,
+`_PROBE_CONNECT_TIMEOUT` (1.5s) separado do timeout normal (4s) pra sonda
+"às cegas" de HTTPS (a maioria das câmeras não escuta em 443, e via
+WireGuard a rejeição não costuma ser instantânea); e o esquema descoberto
+(http/https) por host agora persiste em
+`DATA_DIR/web_proxy_scheme_cache.json` por tenant (`_persist_web_proxy_scheme`
+/ `_seed_web_proxy_scheme_from_disk`), sobrevivendo a restart/deploy em vez
+de zerar toda vez (antes só vivia em memória, `_scheme_cache`). Validado num
+container descartável a partir da imagem real de produção com uma "câmera"
+de mentira `ThreadingHTTPServer`: duas entradas simultâneas que antes
+levariam ~2.4s (serializadas pelo event loop) passaram a levar ~1.25s
+(paralelas de verdade). Script de validação rodado ad-hoc dentro de um
+container descartável a partir da imagem de produção (não commitado no
+repositório).
+
+**Incidente causado por mim durante a publicação, corrigido na hora**: pra
+testar a mudança usei um container descartável criado com `docker create
+... sleep 3600` (só pra não subir servindo tráfego enquanto eu copiava os
+arquivos corrigidos pra dentro dele). Ao rodar `docker commit` nesse
+container pra gerar a imagem candidata, o Docker gravou `sleep 3600` como
+`CMD` da imagem nova -- **não** o `uvicorn` original. Isso passou pela
+validação funcional (que rodava o teste chamando as funções Python direto,
+sem depender do CMD da imagem) e só apareceu depois do deploy: os dois
+containers de produção (v2 e v3) subiram rodando `sleep`, sem nada
+escutando na porta 8000 -- API fora do ar por alguns minutos (nginx
+devolvendo 502). Revertido imediatamente pro `.env` anterior
+(`sightops-prod-api:20260905-webproxy2`), confirmado saudável, e só depois
+refeita a imagem certa com `docker commit --change='CMD [...]'` explícito
+restaurando o `CMD` real antes de gerar a tag definitiva
+(`sightops-prod-api:20260905-webproxylat2`) -- essa sim testada rodando
+sozinha (sem override de comando) antes de publicar de novo.
+
+**Armadilha nova, pra não repetir**: `docker commit` de um container criado
+com `docker create/run <imagem> <comando-diferente>` herda esse comando
+como `CMD` da imagem resultante, não o `CMD` original da imagem base.
+Sempre que usar esse padrão (container descartável parado com `sleep` só
+pra copiar arquivo dentro), restaurar o `CMD` de verdade explicitamente no
+`commit` (`--change='CMD [...]'`) e, se possível, **subir um container de
+verdade da imagem candidata (sem override nenhum) antes de publicar**, só
+pra confirmar que ela sobe sozinha e escuta na porta certa -- é o que
+teria pego esse erro antes de chegar em produção.
+
+**Detalhe à parte, já conhecido mas reconfirmado**: depois de recriar o
+container `cam-snapshot-api` (IP interno novo), o `sightops-prod-nginx` do
+release v2 ficou preso no IP antigo (`connect() failed: Host is
+unreachable`) até um `docker restart sightops-prod-nginx` -- `nginx -s
+reload` sozinho não bastou dessa vez. O `sightops-v3-nginx` não teve esse
+problema no mesmo evento.
