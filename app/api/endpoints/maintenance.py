@@ -21,7 +21,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
-from app.api.endpoints.cameras import _ip_in_inventory, resolve_camera_password
+from app.api.endpoints.cameras import _camera_row_for_ip, _ip_in_inventory, resolve_camera_password
 from app.core.paths import BASE_DIR, INVENTORY_JSON_PATH, DVR_INVENTORY_JSON_PATH, NVR_INVENTORY_JSON_PATH, SAIDA_DIR, DATA_DIR
 from app.core.tenant_context import get_current_tenant_slug, tenant_recorder_inventory_path, tenant_scoped_path
 from app.services.inventory_json import load_inventory_json, save_inventory_json
@@ -87,6 +87,17 @@ def _ip_belongs_to_current_tenant(ip: str) -> bool:
     tenants neste sistema (mesmo raciocinio de _ip_in_inventory em
     cameras.py, agora cobrindo tambem o inventario de gravador)."""
     return _ip_in_inventory(ip) or _host_in_recorder_inventory(ip)
+
+
+def _device_http_port(ip: str) -> int:
+    """Porta HTTP configurada pra este equipamento (camera ou DVR/NVR),
+    ou 80 se nao houver nada salvo/o campo estiver vazio."""
+    linha = _camera_row_for_ip(ip) or _recorder_row_for_host(ip)
+    try:
+        porta = int((linha or {}).get("http_port") or 80)
+    except (TypeError, ValueError):
+        porta = 80
+    return porta if 1 <= porta <= 65535 else 80
 
 
 def _camera_web_target_url(ip: str, path: str = "", query: str = "") -> str:
@@ -1218,8 +1229,6 @@ async def maintenance_camera_web_proxy(ip: str, request: Request, path: str = ""
     # fetch_device, que tenta https e http.
     _camera_web_target_url(ip, path, str(request.url.query or ""))
 
-    username, password = resolve_camera_password(ip, "", "")
-
     headers: dict[str, str] = {
         "User-Agent": request.headers.get("user-agent") or "SightOps device web proxy",
         "Accept": request.headers.get("accept") or "*/*",
@@ -1231,12 +1240,26 @@ async def maintenance_camera_web_proxy(ip: str, request: Request, path: str = ""
     cookie = _camera_cookie_header(request)
     if cookie:
         headers["Cookie"] = cookie
+
+    # Se o navegador ja mandou Authorization e porque o proprio proxy pediu
+    # (via 401 + WWW-Authenticate) e o operador digitou a senha no dialogo
+    # nativo -- essa credencial tem prioridade sobre a senha salva no
+    # sistema (que pode nao existir ou estar errada, motivo pelo qual o
+    # navegador esta mandando Authorization agora). Repassa direto e nao
+    # deixa fetch_device tentar "ajudar" com auth=Basic/Digest por cima.
+    auth_navegador = request.headers.get("authorization")
+    if auth_navegador:
+        headers["Authorization"] = auth_navegador
+        username, password = "", ""
+    else:
+        username, password = resolve_camera_password(ip, "", "")
+
     body = await request.body()
 
     try:
         upstream = fetch_device(
             ip, path, str(request.url.query or ""), request.method, headers, body,
-            username=username, password=password,
+            username=username, password=password, http_port=_device_http_port(ip),
         )
     except DeviceUnreachable as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc

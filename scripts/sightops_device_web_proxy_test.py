@@ -94,6 +94,51 @@ def main() -> None:
     assert resp.status_code == 401
     assert "WWW-Authenticate" in resp.headers
 
+    # --- http_port customizado (equipamento fora da porta 80) aparece so no esquema http
+    proxy._scheme_cache.clear()
+    urls_chamadas = []
+
+    def fake_request_porta_customizada(method, url, **kw):
+        urls_chamadas.append(url)
+        if url.startswith("https://"):
+            raise requests.exceptions.ConnectionError("recusado")
+        return Resposta(200)
+
+    with patch.object(proxy.requests, "request", side_effect=fake_request_porta_customizada):
+        proxy.fetch_device("10.0.0.6", "/", "", "GET", {}, b"", http_port=8080)
+    assert urls_chamadas[0] == "https://10.0.0.6/", urls_chamadas  # https sempre porta padrao
+    assert urls_chamadas[1] == "http://10.0.0.6:8080/", urls_chamadas  # http usa a porta customizada
+
+    # --- Timeout (nao e ConnectionError) nao dispara fallback de esquema,
+    #     mas tambem nao pode escapar cru -- vira DeviceUnreachable
+    proxy._scheme_cache.clear()
+
+    def fake_request_timeout(method, url, **kw):
+        raise requests.exceptions.ReadTimeout("equipamento travou")
+
+    with patch.object(proxy.requests, "request", side_effect=fake_request_timeout):
+        try:
+            proxy.fetch_device("10.0.0.10", "/", "", "GET", {}, b"")
+            raise AssertionError("deveria ter levantado DeviceUnreachable")
+        except proxy.DeviceUnreachable:
+            pass
+
+    # --- erro de rede durante o retry de Digest tambem vira DeviceUnreachable
+    proxy._scheme_cache.clear()
+
+    def fake_request_digest_falha_rede(method, url, auth=None, **kw):
+        tipo = type(auth).__name__ if auth else None
+        if tipo == "HTTPBasicAuth":
+            return Resposta(401, headers={"WWW-Authenticate": 'Digest realm="cam", nonce="abc"'})
+        raise requests.exceptions.SSLError("certificado ruim no retry")
+
+    with patch.object(proxy.requests, "request", side_effect=fake_request_digest_falha_rede):
+        try:
+            proxy.fetch_device("10.0.0.11", "/", "", "GET", {}, b"", username="admin", password="1234")
+            raise AssertionError("deveria ter levantado DeviceUnreachable")
+        except proxy.DeviceUnreachable:
+            pass
+
     # --- filter_response_headers deixa passar www-authenticate (faltava
     #     antes desta correcao) e descarta o que nao esta na lista
     filtrados = proxy.filter_response_headers({

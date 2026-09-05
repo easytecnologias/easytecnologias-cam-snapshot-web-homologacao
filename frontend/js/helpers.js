@@ -68,7 +68,7 @@ function pingBadge(ms) {
 }
 
 function openCamera(ip) {
-  window.open(`http://${ip}`, '_blank');
+  window.open(`${API_BASE}/api/maintenance/web/${encodeURIComponent(ip)}/`, '_blank');
 }
 
 //  Filtros inline 
