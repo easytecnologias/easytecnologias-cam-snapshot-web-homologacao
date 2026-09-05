@@ -11,7 +11,7 @@ import unicodedata
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from urllib.parse import quote, urlsplit, urlunsplit
 
 import requests
@@ -1176,6 +1176,24 @@ def maintenance_live_snapshot(ip: str, user: str = "admin", password: str = ""):
             except Exception:
                 continue
     return Response(status_code=503)
+
+
+def _recorder_row_for_host(host: str) -> Optional[Dict[str, Any]]:
+    """Acha a linha do inventario de DVR/NVR (qualquer canal) para este
+    host, no tenant atual -- mesmo padrao de _camera_row_for_ip em
+    cameras.py, so que para gravador."""
+    alvo = str(host or "").strip()
+    if not alvo:
+        return None
+    for fonte in ("dvr", "nvr"):
+        for linha in _load_rows_for_source(fonte):
+            if isinstance(linha, dict) and str(linha.get("host") or "").strip() == alvo:
+                return linha
+    return None
+
+
+def _host_in_recorder_inventory(host: str) -> bool:
+    return _recorder_row_for_host(host) is not None
 
 
 @router.api_route("/maintenance/web/{ip}/", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"])
