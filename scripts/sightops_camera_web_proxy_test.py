@@ -76,6 +76,16 @@ def main() -> None:
     assert_true("/api/maintenance/web/100.64.11.39/jsBase/lib/jquery.js" in rewritten, "jsBase absoluto nao foi reescrito")
     assert_true('/api/maintenance/web/100.64.11.39/jsBase/lib/m.js' in rewritten, "url JS absoluta nao foi reescrita")
     assert_true("/api/maintenance/web/100.64.11.39/ISAPI/System" in rewritten, "href absoluto nao foi reescrito")
+
+    # --- host de DVR/NVR (sem estar no inventario de camera) tambem e
+    #     aceito pela checagem de posse, e host de nenhum dos dois inventarios
+    #     continua bloqueado
+    maintenance._ip_in_inventory = lambda ip: False
+    maintenance._host_in_recorder_inventory = lambda ip: True
+    assert_true(maintenance._ip_belongs_to_current_tenant("10.50.11.2"), "host de DVR/NVR deveria ser aceito")
+
+    maintenance._host_in_recorder_inventory = lambda ip: False
+    assert_true(not maintenance._ip_belongs_to_current_tenant("10.50.11.2"), "host fora dos dois inventarios deveria ser recusado")
     print("ok")
 
 

@@ -29,6 +29,7 @@ from app.services.db_store import load_app_settings, save_app_settings, legacy_r
 from app.services.windows_inventory_service import load_windows_inventory
 from app.services.ping_service import _do_ping_sync
 from app.services.live_stream_service import register_stream, unregister_stream
+from app.services.device_web_proxy import DeviceUnreachable, fetch_device, filter_response_headers
 
 router = APIRouter(prefix="/api", tags=["maintenance"])
 
@@ -78,10 +79,22 @@ def _is_proxy_allowed_host(host: str) -> bool:
     return bool(ip.is_private or ip in cgnat)
 
 
+def _ip_belongs_to_current_tenant(ip: str) -> bool:
+    """Confere se este IP pertence a uma camera OU um DVR/NVR cadastrado no
+    tenant atual (nao IP arbitrario). Sem isso, um usuario logado em
+    QUALQUER cliente consegue abrir a interface web de um IP privado de
+    OUTRO cliente so sabendo o IP -- faixas privadas se repetem entre
+    tenants neste sistema (mesmo raciocinio de _ip_in_inventory em
+    cameras.py, agora cobrindo tambem o inventario de gravador)."""
+    return _ip_in_inventory(ip) or _host_in_recorder_inventory(ip)
+
+
 def _camera_web_target_url(ip: str, path: str = "", query: str = "") -> str:
     host = _as_str(ip)
     if not _is_proxy_allowed_host(host):
         raise HTTPException(status_code=400, detail="proxy web permitido apenas para IP privado/CGNAT")
+    if not _ip_belongs_to_current_tenant(host):
+        raise HTTPException(status_code=403, detail=f"{host} nao pertence a nenhum equipamento deste cliente")
     clean_path = "/" + str(path or "").lstrip("/")
     if ".." in clean_path.split("/"):
         raise HTTPException(status_code=400, detail="caminho invalido")
@@ -1199,10 +1212,16 @@ def _host_in_recorder_inventory(host: str) -> bool:
 @router.api_route("/maintenance/web/{ip}/", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"])
 @router.api_route("/maintenance/web/{ip}/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"])
 async def maintenance_camera_web_proxy(ip: str, request: Request, path: str = ""):
-    """Proxy HTTP da interface web da camera via servidor/WireGuard."""
-    target_url = _camera_web_target_url(ip, path, request.url.query)
+    """Proxy HTTP da interface web da camera/DVR/NVR via servidor/WireGuard."""
+    # so o efeito colateral de validar importa aqui (400 IP publico, 403
+    # fora do inventario do tenant) -- a URL de fato usada no fetch vem de
+    # fetch_device, que tenta https e http.
+    _camera_web_target_url(ip, path, str(request.url.query or ""))
+
+    username, password = resolve_camera_password(ip, "", "")
+
     headers: dict[str, str] = {
-        "User-Agent": request.headers.get("user-agent") or "SightOps camera web proxy",
+        "User-Agent": request.headers.get("user-agent") or "SightOps device web proxy",
         "Accept": request.headers.get("accept") or "*/*",
         "Accept-Language": request.headers.get("accept-language") or "pt-BR,pt;q=0.9,en;q=0.8",
     }
@@ -1213,35 +1232,26 @@ async def maintenance_camera_web_proxy(ip: str, request: Request, path: str = ""
     if cookie:
         headers["Cookie"] = cookie
     body = await request.body()
+
     try:
-        upstream = requests.request(
-            request.method,
-            target_url,
-            headers=headers,
-            data=body if body else None,
-            timeout=(4.0, 25.0),
-            allow_redirects=False,
-            verify=False,
+        upstream = fetch_device(
+            ip, path, str(request.url.query or ""), request.method, headers, body,
+            username=username, password=password,
         )
-    except requests.RequestException as exc:
-        raise HTTPException(status_code=502, detail=f"falha ao acessar web da camera {ip}: {exc}") from exc
+    except DeviceUnreachable as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     resp_headers: dict[str, str] = {
         "Cache-Control": "no-store",
         "X-Frame-Options": "SAMEORIGIN",
+        **filter_response_headers(upstream.headers),
     }
-    for key, value in upstream.headers.items():
-        low = key.lower()
-        if low in {"content-length", "content-encoding", "transfer-encoding", "connection", "server"}:
-            continue
-        if low == "location":
-            resp_headers["Location"] = _proxy_location_header(value, ip=ip)
-            continue
-        if low == "set-cookie":
-            resp_headers["Set-Cookie"] = value
-            continue
-        if low in {"content-type", "cache-control", "pragma", "expires"}:
-            resp_headers[key] = value
+    location = upstream.headers.get("location")
+    if location:
+        resp_headers["Location"] = _proxy_location_header(location, ip=ip)
+    set_cookie = upstream.headers.get("set-cookie")
+    if set_cookie:
+        resp_headers["Set-Cookie"] = set_cookie
 
     media_type = upstream.headers.get("content-type") or "application/octet-stream"
     content = _rewrite_camera_web_content(upstream.content or b"", ip=ip, content_type=media_type)
