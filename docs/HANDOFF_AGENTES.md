@@ -7,6 +7,225 @@ resposta final do agente pro usuário. Entrada mais recente no topo.
 
 ---
 
+## 2026-09-05 — Proxy web de camera/DVR/NVR corrigido (e uma regressao de seguranca restaurada)
+
+Usuario reclamou do botao "Web" (abrir a interface nativa do equipamento):
+"uma das piores coisas que tem no sistema... tudo que ele deveria fazer
+ele faz mal". Investigacao achou 3 pontos fazendo `window.open('http://'+ip)`
+direto do navegador (so funciona com VPN manual do operador pra rede
+daquele cliente especifico) e um quarto (`cameras.js`) ja usando um proxy
+de verdade (`/api/maintenance/web/{ip}/`, `app/api/endpoints/maintenance.py`)
+mas com 3 bugs: so tentava HTTP, descartava `WWW-Authenticate` (quebrava
+login Basic/Digest), e a checagem de posse do IP no inventario do tenant
+tinha regredido -- **ja tinha sido corrigida antes, num hotfix de
+seguranca anterior, e sumiu num deploy posterior que partiu de imagem
+anterior ao hotfix**. Sem essa checagem, qualquer usuario logado em
+QUALQUER cliente conseguia abrir camera/servico HTTP privado de outro
+cliente so sabendo o IP (faixas privadas se repetem entre tenants).
+
+**Corrigido** (execucao via subagent-driven-development, plano em
+`docs/superpowers/plans/2026-09-05-camera-dvr-web-proxy.md`):
+- `app/services/device_web_proxy.py` (novo): fetch com fallback
+  HTTPS->HTTP, login Basic->Digest automatico quando ha senha salva,
+  `http_port` do inventario agora respeitado (equipamento fora da porta 80
+  volta a funcionar).
+- `_ip_belongs_to_current_tenant` restaurada em `maintenance.py` (mesmo
+  nome de antes, mesmo teste `scripts/sightops_camera_web_proxy_test.py`
+  que ja existia parcialmente no repo antes desta tarefa).
+- Header `Authorization` que o navegador manda de volta (depois do dialogo
+  nativo de login) agora e repassado pro equipamento -- sem isso, login
+  manual de DVR/NVR (que nao tem senha salva) ficava num loop infinito de
+  dialogo, mesmo com o `WWW-Authenticate` sendo repassado certo.
+- 4 pontos de entrada corrigidos: `cameras.js` (ja usava o proxy, so
+  ganhou os fixes de trás), `bootstrap.js`, `recorders.js`, e um quarto
+  achado só na revisão final: `helpers.js` (`openCamera`, usado pela
+  tabela Inventario->DVR).
+
+**Validado ao vivo** (nao so teste local) contra o codigo REAL de
+producao: extrai `maintenance.py`/`cameras.py` do container, apliquei o
+patch, subi uma "camera" de mentira em HTTP com Basic auth dentro de
+container isolado -- confirmado: posse aceita/recusada, fallback
+https->http, login automatico funcionando, Authorization repassado do
+navegador funcionando, porta customizada funcionando.
+
+**Achado no processo, corrigido de brinde**: um commit local acabou
+capturando conteudo nao relacionado (feature Messenger/CPF ja pendente no
+working tree) por um `git add arquivo-inteiro` sem querer -- desfeito com
+`git reset` e recriado isolando so o diff certo, antes de qualquer coisa
+sair da maquina.
+
+**Deploy**: imagem `sightops-prod-api:20260905-webproxy2` (v2 e v3) +
+frontend (`bootstrap.js`, `recorders.js`, `helpers.js`, `index.html`).
+28 commits desta sessao (incluindo trabalho anterior do dia: telemetria de
+OLT, validacao ao vivo VSOL) publicados em `origin/main` no mesmo momento.
+
+---
+
+## 2026-09-04 tarde — Menu novo "Messenger": historico de WhatsApp (enviado + recebido)
+
+Pedido do usuário: uma tela pra acompanhar em tempo real as mensagens de
+WhatsApp do controle de acesso, tipo a tela do próprio WhatsApp (bolhas dos
+dois lados), sem precisar de API não oficial -- a Cloud API oficial já dá
+tudo que precisa (o que o sistema manda + o que a Meta devolve de status
+via webhook + as respostas que já chegavam pelo mesmo webhook).
+
+**Novo:** `app/services/access_control_whatsapp_log.py` -- tabela
+`access_whatsapp_messages` (tenant_slug, contact_number, direction,
+body, status, wa_message_id, error, from_name). Não é canal de envio novo,
+só registra o que já passa pelo canal que existe.
+
+**Hooks (nenhum muda o comportamento de envio em si, só registra):**
+- `_send_whatsapp_cloud`/`_send_whatsapp_evolution`
+  (`access_control_notifications.py`) -- logam toda tentativa de envio
+  (sucesso E falha) logo depois do POST pra Meta/Evolution. Cloud API
+  também guarda o `wamid` (id da mensagem) da resposta, pra casar depois
+  com a confirmação de entrega/leitura.
+- `api_access_control_whatsapp_meta_webhook`
+  (`app/api/endpoints/access_control.py`) -- `extract_meta_statuses` agora
+  também chama `update_message_status(wamid, status)` (casa pelo `wamid`);
+  `extract_meta_inbound` chama `log_inbound_message` antes de processar a
+  triagem/cadastro (que continua exatamente igual).
+- 2 endpoints novos, só leitura: `GET /whatsapp/conversations` (uma linha
+  por numero, rotulada com o nome do aluno/responsável quando bate com
+  `guardian_phone` cadastrado) e
+  `GET /whatsapp/conversations/{numero}/messages`.
+
+**Menu novo:** "Messenger" entre "Acesso ao Vivo" e "Controle de Acesso"
+(`data-view="access-messenger"`), com chave nova no `MODULE_CATALOG`
+(`auth_store.py`) -- gateável por usuário/tenant igual todo módulo, mesma
+mecânica de sempre (sem mecanismo de permissão novo). Frontend:
+`frontend/js/messenger.js` (novo, se auto-inicializa via
+`DOMContentLoaded`, sem depender do `bootstrap.js`, igual ao
+`accessLive.js`), polling de 6s só enquanto a view está visível.
+
+**Achado no caminho, corrigido junto:** o `MODULE_CATALOG` de produção
+estava sem as entradas de `access-live`/`access-control` (drift antigo,
+não relacionado a esta tarefa -- essas duas telas já funcionavam porque a
+restrição só entra em vigor pra tenant que já configurou
+`enabled_modules`, mas ninguém conseguia gerenciar a visibilidade delas
+pelo painel de Módulos). Corrigido no mesmo deploy.
+
+**Nota de leitura:** o texto salvo pro envio é o corpo humano que o
+sistema monta (`_build_whatsapp_message`), não o texto literal renderizado
+pela Meta -- a Cloud API sempre manda por template aprovado (nunca texto
+livre em conversa iniciada pela empresa), então o que aparece no
+WhatsApp do responsável pode ter uma redação levemente diferente da que
+fica no histórico. Suficiente pra acompanhar o que foi comunicado; não é
+espelho byte-a-byte da tela real.
+
+Testes: `scripts/sightops_access_control_whatsapp_log_test.py` (novo --
+cobre o módulo isolado e a integração real com `_send_whatsapp_cloud`
+mockando `requests.post`). Deploy: imagem
+`sightops-prod-api:20260904-messenger` (v2 e v3), migração da tabela nova
+testada contra o Postgres real com tenant descartável antes da troca de
+container.
+
+**Correções no mesmo dia, ainda no ar (imagem final:
+`sightops-prod-api:20260904-messenger3`):**
+- `accessMessengerTime`: `+00` do Postgres (fuso sem os minutos) não batia
+  com a regex que detectava se a data já tinha fuso -- toda mensagem
+  aparecia "Invalid Date". Corrigido, e trocado pra mostrar data+hora
+  completa (`accessMessengerDateTime`) em vez de só HH:MM.
+- Nome da pessoa não aparecia (só o número cru): `guardian_phone` costuma
+  ser cadastrado SEM o 55 na frente, mas o `contact_number` das mensagens
+  sempre tem (mesma normalização do envio real,
+  `_whatsapp_target`/`_numero_whatsapp`). `list_conversations` agora casa
+  pelas duas formas.
+- **Backfill de histórico**: o log só existia a partir de hoje: reimportei
+  as mensagens já enviadas antes (via `access_events.notification_status`,
+  que já tinha `whatsapp_sent`/`whatsapp_failed` por evento) com
+  `scripts/sightops_whatsapp_backfill_from_events.py <tenant> --antes
+  "<hora do deploy>" [--dry-run]` -- reconstrói o texto com a MESMA função
+  do envio real (`_build_whatsapp_message`), grava com o `occurred_at`
+  original (não a hora do backfill), nunca conta `whatsapp_skipped` (nada
+  foi mandado) nem eventos depois do `--antes` (evita duplicar o que já
+  foi logado ao vivo). Rodado pro RADS: 1522 eventos, 1492 mensagens
+  criadas, 30 puladas por falta de telefone.
+
+  **Bug achado pelo usuário logo depois**: a mesma pessoa aparecia como
+  DUAS conversas na lista. Causa: `log_outbound_message` gravava
+  `contact_number` só com `_digits()` (sem normalizar) -- o envio ao vivo
+  sempre passa o número já com "55" na frente (`_numero_whatsapp`), mas o
+  backfill passava o `guardian_phone` cru (como fica salvo em
+  `access_people`, tipicamente sem DDI) direto pra função. Corrigido pra
+  `log_outbound_message`/`log_inbound_message`/`list_messages` sempre
+  normalizarem com `_digits_br` (mesma regra do envio: 10/11 dígitos sem
+  "55" ganham o prefixo). Rodei um `UPDATE` uma vez só nos 1458 registros
+  já gravados errados do RADS -- 109 conversas viraram 101 (as duplicadas
+  se juntaram), 0 ficaram sem nome resolvido depois. **Não reconstrói mensagem
+  RECEBIDA** (resposta do responsável) -- esse texto nunca foi guardado em
+  lugar nenhum antes de hoje, não tem como recuperar. Não rodei para os
+  outros tenants (`easy-tecnologias`/`cliente-sync-reports` parecem ser
+  dado de teste, sem gente de verdade usando o Messenger lá) -- rodar sob
+  pedido se precisar.
+
+---
+
+## 2026-09-04 — Import de planilha nunca funcionou (Content-Type errado) + CPF virou chave obrigatoria/unica
+
+**1) `[object Object]` no import de aluno.** `api()` (`frontend/js/core.js`)
+fixava `Content-Type: application/json` sempre, mesmo quando o body era
+`FormData` -- isso apaga o boundary automatico do multipart, o FastAPI
+nunca acha o campo `arquivo` (`UploadFile = File(...)`) e devolve 422 com
+`detail` em formato de array. `jsonOrReadableError` joga esse array direto
+em `new Error(...)`, que vira a string literal `"[object Object]"`. So
+`enviarPlanilha` (`accessControl.js:1125`) usava `api()` com FormData --
+todo o resto (foto facial, KMZ, CSV do planejamento) usa `fetch()` cru, por
+isso só esse import nunca funcionou. Corrigido: `api()` só manda
+`Content-Type` json quando o body NÃO é `FormData`. Provado com repro real
+contra FastAPI local (422 -> 200) e confirmado ao vivo em
+`sightops.easytecnologias.com.br/v2` e `/v3` (`core.js?v=165`).
+
+**2) CPF virou obrigatorio, unico por tenant, e cruzado com matricula.**
+Pedido do usuário depois de achar (junto comigo) a mesma aluna cadastrada
+duas vezes no RADS -- matricula trocou de ano pro outro (496 -> 6668),
+CPF igual, nada cruzava os dois. `save_person`
+(`app/services/access_control_store.py`) agora exige `document_id`
+(11 dígitos, só numero, função `_clean_cpf`), rejeita CPF de outra pessoa
+(`idx_access_people_tenant_document`, unique parcial igual a de matricula),
+e se matricula aponta pra uma pessoa e CPF pra outra, recusa em vez de
+adivinhar. Mesma regra em `analisar_planilha`/`aplicar_planilha`
+(`access_control_import.py`) -- CPF virou coluna obrigatória. Cadastro
+antigo sem CPF (45 no RADS) foi deixado como está, por pedido do usuário --
+só bloqueia escrita nova.
+
+**Armadilha nova que eu mesmo pisei**: CPF antigo no banco estava salvo
+COM pontuação (`589.140.485-00`), e a checagem nova compara contra o valor
+normalizado (`58914048500`) -- string diferente, não colide. Rodei
+`UPDATE ... regexp_replace(document_id, '[^0-9]', '', 'g')` em todos os 60
+CPFs com pontuação de todos os tenants (só formatação, nenhum dado
+apagado) pra fechar isso. Antes de perceber o motivo, testei a regra
+DIRETO contra o cadastro real da aluna do bug (Maria da Paixão, RADS) sem
+usar tenant descartável -- `save_person` sem `id` explícito reconhece
+"mesmo CPF = mesma pessoa" e faz UPDATE completo, então o payload de teste
+(só nome+CPF) apagou matrícula/turma/site dela. Restaurado por SQL direto
+(nome, matrícula 6668, site "ESCOLA PRESIDENTE DUTRA" recuperado via
+`access_group_members`/`access_devices`, responsável, WhatsApp) --
+**turma ficou em branco, não tinha como recuperar de nenhuma tabela**, a
+escola precisa preencher de novo se souber qual era. Provisionamento na
+catraca (`access_provision_status` = "ok" nos 2 dispositivos) não foi
+afetado. Licao: `save_person` sem `id` que resolve por CPF/matricula É
+"criar OU atualizar" por design (é o que a reimportação de planilha
+depende) -- nunca testar isso contra pessoa real de novo, só tenant/pessoa
+descartável.
+
+Deploy: imagem `sightops-prod-api:20260904-cpf` (v2 e v3, mesma imagem
+hoje), construída sobre `20260904-telemetryfix` só com os 2 arquivos
+`.py` trocados. Migração do índice já criada e validada contra o Postgres
+real antes da troca de container. `.env.production`/`.env.v3` também
+corrigidos (estavam apontando pra uma tag de 3 dias atrás mesmo com o
+container já rodando outra -- mesma armadilha de sempre).
+
+Testes: `scripts/sightops_access_control_cpf_test.py` (novo),
+`scripts/sightops_access_control_import_test.py` (estendido com CPF),
+mais 9 arquivos `sightops_access_control_*_test.py` que chamavam
+`save_person` sem `document_id` e precisaram de CPF adicionado pra
+continuar passando (`sightops_access_control_routes_test.py` já falhava
+antes por outro motivo -- import quebrado pré-existente de
+`connector_service.ensure_connector_targets_allowed`, não relacionado).
+
+---
+
 ## 2026-08-26 — WhatsApp migrado para a Cloud API oficial; Evolution e W-API removidos
 
 **Agente:** Claude.
