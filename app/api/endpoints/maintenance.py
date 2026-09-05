@@ -1,5 +1,6 @@
 ﻿from __future__ import annotations
 
+import asyncio
 import json
 import os
 import subprocess
@@ -29,7 +30,9 @@ from app.services.db_store import load_app_settings, save_app_settings, legacy_r
 from app.services.windows_inventory_service import load_windows_inventory
 from app.services.ping_service import _do_ping_sync
 from app.services.live_stream_service import register_stream, unregister_stream
-from app.services.device_web_proxy import DeviceUnreachable, fetch_device, filter_response_headers
+from app.services.device_web_proxy import (
+    DeviceUnreachable, fetch_device, filter_response_headers, get_cached_scheme, seed_scheme,
+)
 
 router = APIRouter(prefix="/api", tags=["maintenance"])
 
@@ -98,6 +101,45 @@ def _device_http_port(ip: str) -> int:
     except (TypeError, ValueError):
         porta = 80
     return porta if 1 <= porta <= 65535 else 80
+
+
+_WEB_PROXY_SCHEME_CACHE_PATH = DATA_DIR / "web_proxy_scheme_cache.json"
+
+
+def _web_proxy_scheme_cache_key(host: str) -> str:
+    return f"{get_current_tenant_slug()}:{host}"
+
+
+def _load_persisted_web_proxy_schemes() -> Dict[str, str]:
+    """Esquema (http/https) que ja funcionou para cada host, gravado em disco
+    para sobreviver a restart/deploy da API -- arquivo proprio, separado do
+    inventario de camera/gravador, pra nao arriscar corromper aquele arquivo
+    (que outras rotinas, como a varredura automatica, tambem escrevem)."""
+    try:
+        dados = json.loads(_WEB_PROXY_SCHEME_CACHE_PATH.read_text(encoding="utf-8"))
+        return dados if isinstance(dados, dict) else {}
+    except Exception:
+        return {}
+
+
+def _persist_web_proxy_scheme(host: str, scheme: str) -> None:
+    chave = _web_proxy_scheme_cache_key(host)
+    dados = _load_persisted_web_proxy_schemes()
+    if dados.get(chave) == scheme:
+        return
+    dados[chave] = scheme
+    try:
+        _WEB_PROXY_SCHEME_CACHE_PATH.write_text(json.dumps(dados), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _seed_web_proxy_scheme_from_disk(host: str) -> None:
+    if get_cached_scheme(host):
+        return
+    persistido = _load_persisted_web_proxy_schemes().get(_web_proxy_scheme_cache_key(host))
+    if persistido:
+        seed_scheme(host, persistido)
 
 
 def _camera_web_target_url(ip: str, path: str = "", query: str = "") -> str:
@@ -1256,13 +1298,25 @@ async def maintenance_camera_web_proxy(ip: str, request: Request, path: str = ""
 
     body = await request.body()
 
+    _seed_web_proxy_scheme_from_disk(ip)
     try:
-        upstream = fetch_device(
+        # fetch_device faz uma chamada de rede sincrona (requests) que pode
+        # levar segundos -- sem to_thread, ela trava a unica thread do event
+        # loop, e TODA a API (todo cliente, toda rota) fica parada esperando
+        # essa camera responder. E o motivo mais provavel do "demora muito"
+        # ao clicar em Web: cada sub-recurso da pagina da camera (JS/CSS/
+        # imagem) tinha que esperar o anterior terminar em vez de andar em
+        # paralelo.
+        upstream = await asyncio.to_thread(
+            fetch_device,
             ip, path, str(request.url.query or ""), request.method, headers, body,
             username=username, password=password, http_port=_device_http_port(ip),
         )
     except DeviceUnreachable as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+    esquema_usado = get_cached_scheme(ip)
+    if esquema_usado:
+        _persist_web_proxy_scheme(ip, esquema_usado)
 
     resp_headers: dict[str, str] = {
         "Cache-Control": "no-store",

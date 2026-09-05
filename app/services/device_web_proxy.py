@@ -18,12 +18,35 @@ RESPONSE_HEADER_ALLOWLIST = {
 }
 
 # scheme que funcionou da ultima vez, por host -- evita pagar a tentativa
-# dupla em toda sub-requisicao (JS/CSS/imagem) da mesma pagina.
+# dupla em toda sub-requisicao (JS/CSS/imagem) da mesma pagina. So mora em
+# memoria: zera a cada restart/deploy (o chamador pode semear de volta um
+# valor persistido via seed_scheme).
 _scheme_cache: Dict[str, str] = {}
+
+# timeout de conexao curto para a tentativa "as cegas" de esquema (quando
+# ainda nao sabemos qual funciona) -- a maioria das cameras/DVRs de CFTV nao
+# escuta em 443, e via WireGuard a rejeicao costuma nao ser instantanea, so
+# expira no timeout normal (4s). A tentativa que realmente tem chance de dar
+# certo (a ultima da lista, ou a que ja esta em cache) usa o timeout normal.
+_PROBE_CONNECT_TIMEOUT = 1.5
 
 
 class DeviceUnreachable(Exception):
     pass
+
+
+def get_cached_scheme(host: str) -> str:
+    """Esquema (http/https) que funcionou por ultimo para este host, se este
+    processo ja descobriu -- vazio se ainda nao sabe."""
+    return _scheme_cache.get(host, "")
+
+
+def seed_scheme(host: str, scheme: str) -> None:
+    """Preenche o cache em memoria com um esquema conhecido de fora (ex.:
+    persistido em disco de uma execucao anterior), sem sobrescrever um valor
+    que este processo ja descobriu sozinho."""
+    if scheme in ("http", "https"):
+        _scheme_cache.setdefault(host, scheme)
 
 
 def build_target_url(scheme: str, host: str, path: str, query: str, http_port: int = 80) -> str:
@@ -68,13 +91,20 @@ def fetch_device(
     scheme_usado = ""
 
     try:
-        for scheme in _tentar_schemes(host):
+        schemes = _tentar_schemes(host)
+        for indice, scheme in enumerate(schemes):
             url = build_target_url(scheme, host, path, query, http_port)
+            # so e "as cegas" se ainda nao ha certeza nenhuma sobre este
+            # scheme (nem em cache) e ainda sobra outro esquema pra tentar
+            # depois -- a ultima tentativa da lista sempre usa o timeout
+            # normal, e a que ja bateu com o cache tambem.
+            eh_as_cegas = scheme != _scheme_cache.get(host) and indice < len(schemes) - 1
+            tentativa_timeout = (_PROBE_CONNECT_TIMEOUT, timeout[1]) if eh_as_cegas else timeout
             try:
                 resposta = requests.request(
                     method, url, headers=headers,
                     data=body if body else None,
-                    timeout=timeout, allow_redirects=False, verify=False, auth=auth,
+                    timeout=tentativa_timeout, allow_redirects=False, verify=False, auth=auth,
                 )
                 scheme_usado = scheme
                 break
