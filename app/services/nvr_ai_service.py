@@ -159,7 +159,7 @@ def _segment_overlaps_window(segment: Dict[str, Any], start_dt: datetime, end_dt
     return seg_start < end_dt and seg_end > start_dt
 
 
-def _dahua_media_find_segments(
+def dahua_media_find_segments(
     *,
     host: str,
     http_port: int,
@@ -288,7 +288,7 @@ def query_recording_segments(req: Dict[str, Any]) -> Dict[str, Any]:
             "message": "Use a indexacao por RTSP para este padrao de equipamento.",
         }
 
-    media_find = _dahua_media_find_segments(
+    media_find = dahua_media_find_segments(
         host=host,
         http_port=int(req.get("http_port") or 80),
         user=user,
