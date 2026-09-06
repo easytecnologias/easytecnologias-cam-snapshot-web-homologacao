@@ -1785,6 +1785,31 @@ function camHasDefaultTitle(c) {
   ].some(rx => rx.test(title));
 }
 
+// Mapa IP-da-camera -> titulo bom, puxado do cadastro de Cameras IP.
+// Usado pelas telas Gravadores/IA-NVR/Dashboard como a MELHOR fonte de nome
+// pra um canal, antes de cair pro fallback generico "Camera NN" -- muita
+// camera ja tem nome de verdade la (ex: "1 - HOTEL KINOA") mesmo quando o
+// DVR fisico nunca foi renomeado e ainda reporta o serial de fabrica.
+// Cacheado (uma vez por sessao de tela): as tres telas que usam isso podem
+// chamar sem se preocupar em duplicar a chamada de rede.
+let _camTitleByIpPromise = null;
+async function fetchCameraTitleByIp() {
+  if (_camTitleByIpPromise) return _camTitleByIpPromise;
+  _camTitleByIpPromise = (async () => {
+    const map = {};
+    const resultados = await Promise.all(
+      ['basico', 'olt', 'switch'].map(m => apiJson(`/api/cameras?mode=${m}`).catch(() => null))
+    );
+    resultados.forEach(data => {
+      (data?.cameras || []).forEach(c => {
+        if (c.ip && !camHasDefaultTitle(c)) map[c.ip] = c.titulo;
+      });
+    });
+    return map;
+  })();
+  return _camTitleByIpPromise;
+}
+
 function camHasImgbbDown(c) {
   return !cameraImgbbUrl(c);
 }

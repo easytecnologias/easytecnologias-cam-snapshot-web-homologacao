@@ -217,11 +217,17 @@ function recHasDefaultTitle(r) {
 }
 
 // Nome amigavel pra mostrar na tabela: se o titulo que veio do gravador for
-// generico/serial (recHasDefaultTitle), mostra "Camera NN" em vez do lixo --
-// so na exibicao, nao mexe no dado guardado (o titulo real continua no
+// generico/serial (recHasDefaultTitle), tenta o nome ja cadastrado em
+// Cameras IP pelo mesmo IP (_recCamTitleByIp, carregado em loadInvNvr) --
+// muita camera ja tem nome de verdade la mesmo quando o DVR fisico nunca
+// foi renomeado. So cai pra "Camera NN" se nem isso existir. So na
+// exibicao, nao mexe no dado guardado (o titulo real do canal continua no
 // tooltip e disponivel pra quem quiser editar de verdade).
+let _recCamTitleByIp = {};
 function recDisplayTitle(r) {
   if (r.title && !recHasDefaultTitle(r)) return r.title;
+  const doCadastro = _recCamTitleByIp[r.camera_ip];
+  if (doCadastro) return doCadastro;
   const ch = Number(r.channel);
   return `Camera ${Number.isFinite(ch) && ch > 0 ? String(ch).padStart(2, '0') : '?'}`;
 }
@@ -419,7 +425,10 @@ async function loadInvNvr() {
   _recSessionLoad();
   // Carrega e distribui todos os modos. Assim uma base somente OLT/Switch nao
   // fica invisivel por a tela ter iniciado na aba Basico.
-  const loaded = await _loadRecAllModesForType(_recType);
+  const [loaded] = await Promise.all([
+    _loadRecAllModesForType(_recType),
+    fetchCameraTitleByIp().then(map => { _recCamTitleByIp = map; }),
+  ]);
   if (!loaded.length) {
     const fallbackType = _recType === 'nvr' ? 'dvr' : 'nvr';
     const fallbackRows = await _loadRecAllModesForType(fallbackType);

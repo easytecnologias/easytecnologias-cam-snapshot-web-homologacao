@@ -141,9 +141,12 @@ async function openDashDrawerRecorder(source, filterKey, activeSite) {
     });
     return display;
   })();
+  const camTitleByIp = await fetchCameraTitleByIp();
   const dvrChannelLabel = r => {
     const titulo = r.title || r.titulo || '';
     if (titulo && !camHasDefaultTitle({ titulo })) return titulo;
+    const doCadastro = camTitleByIp[r.camera_ip];
+    if (doCadastro) return doCadastro;
     return `Camera ${String(r.channel || 0).padStart(2, '0')}`;
   };
 

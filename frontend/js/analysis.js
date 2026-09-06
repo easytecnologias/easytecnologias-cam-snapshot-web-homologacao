@@ -182,10 +182,14 @@ async function playbackCreateFrames() {
 let _iaNvrBound = false;
 let _iaNvrTargets = [];
 
+let _iaNvrCamTitleByIp = {};
 async function loadIaNvr() {
   if (!_iaNvrBound) bindIaNvr();
   iaNvrDefaults();
-  const data = await apiJson('/api/ia/nvr/targets');
+  const [data] = await Promise.all([
+    apiJson('/api/ia/nvr/targets'),
+    fetchCameraTitleByIp().then(map => { _iaNvrCamTitleByIp = map; }),
+  ]);
   _iaNvrTargets = data?.targets || [];
   populateIaNvrSiteFilter();
   populateIaNvrDvrSelect();
@@ -249,6 +253,8 @@ function computeIaNvrDvrNames() {
 function iaNvrCameraLabel(t) {
   const titulo = t.title || '';
   if (titulo && !camHasDefaultTitle({ titulo })) return titulo;
+  const doCadastro = _iaNvrCamTitleByIp[t.camera_ip];
+  if (doCadastro) return doCadastro;
   return `Camera ${String(t.channel || 0).padStart(2, '0')}`;
 }
 
