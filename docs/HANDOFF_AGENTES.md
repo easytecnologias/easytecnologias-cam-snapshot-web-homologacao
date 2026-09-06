@@ -2454,3 +2454,15 @@ próprio array de alvos, não reaproveita o estado da tela Gravadores);
 `recorder_name` em cada alvo (campo já existia no inventário, só não
 chegava até essa tela). Imagem final em produção (v2 e v3):
 `sightops-prod-api:20260906-dvrname1`.
+
+**Mais um complemento, mesma tarde**: usuário apontou que o nome bom de
+cada câmera já existe no cadastro de Cameras IP (casado por `camera_ip`),
+então o fallback "Camera NN" era desnecessário nesses casos -- devia puxar
+o nome real primeiro. Adicionada `fetchCameraTitleByIp()` (`cameras.js`,
+compartilhada) -- busca `/api/cameras` nos 3 modos e monta um mapa
+IP→título, cacheada por sessão de tela. Ordem final nas 3 telas: 1) título
+do próprio canal se não for genérico; 2) nome do cadastro de Câmeras IP
+pelo `camera_ip`; 3) "Camera NN" só se nem isso existir. Validado ao vivo
+com 383 câmeras reais carregadas -- canal com título serial e IP batendo
+mostrou corretamente o nome de cadastro ("01 - ENTRADA PERUCABA").
+Frontend-only, sem precisar de nova imagem da API.
