@@ -2443,3 +2443,14 @@ agrupamento renderizando (`DVR-01`, 32 câmeras, PERUCABA/EASY-TECNOLOGIAS),
 `camHasDefaultTitle` sem falso positivo, e o fluxo de renomear completo
 (salvar → ler de volta → apagar) testado contra o backend com um host
 sintético (`203.0.113.250`), sem deixar resíduo em produção.
+
+**Complemento, mesma tarde**: a tela "IA-NVR" (`frontend/js/analysis.js`,
+busca de gravação por IA) tem seu próprio dropdown de câmera, carregado de
+`/api/ia/nvr/targets` -- não foi tocado no fix acima e continuava mostrando
+serial cru. Adicionado um campo "Gravador (DVR)" entre Site e Câmera (mesmo
+algoritmo de `DVR-NN`, calculado localmente porque essa tela carrega seu
+próprio array de alvos, não reaproveita o estado da tela Gravadores);
+`list_nvr_targets` (`app/services/nvr_ai_service.py`) passou a incluir
+`recorder_name` em cada alvo (campo já existia no inventário, só não
+chegava até essa tela). Imagem final em produção (v2 e v3):
+`sightops-prod-api:20260906-dvrname1`.
