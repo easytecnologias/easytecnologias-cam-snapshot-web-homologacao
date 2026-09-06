@@ -127,6 +127,7 @@ def list_nvr_targets() -> Dict[str, Any]:
                 "http_port": port,
                 "channel": ch,
                 "title": _safe_text(r.get("title") or r.get("titulo") or f"Canal {ch:02d}"),
+                "recorder_name": _safe_text(r.get("recorder_name")),
                 "site": site,
                 "local": local or site,
                 "modelo": _safe_text(r.get("modelo") or r.get("recorder_model") or r.get("camera_model")),

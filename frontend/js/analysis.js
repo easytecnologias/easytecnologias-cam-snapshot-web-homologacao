@@ -188,6 +188,7 @@ async function loadIaNvr() {
   const data = await apiJson('/api/ia/nvr/targets');
   _iaNvrTargets = data?.targets || [];
   populateIaNvrSiteFilter();
+  populateIaNvrDvrSelect();
   populateIaNvrCameraSelect();
 }
 
@@ -202,7 +203,11 @@ function iaNvrDefaults() {
 
 function bindIaNvr() {
   _iaNvrBound = true;
-  document.getElementById('iaNvrSite')?.addEventListener('change', populateIaNvrCameraSelect);
+  document.getElementById('iaNvrSite')?.addEventListener('change', () => {
+    populateIaNvrDvrSelect();
+    populateIaNvrCameraSelect();
+  });
+  document.getElementById('iaNvrDvr')?.addEventListener('change', populateIaNvrCameraSelect);
   document.getElementById('iaNvrForm')?.addEventListener('submit', iaNvrRunSearch);
 }
 
@@ -215,16 +220,69 @@ function populateIaNvrSiteFilter() {
     sites.map(s => `<option${s === cur ? ' selected' : ''}>${esc(s)}</option>`).join('');
 }
 
+// Mesma ideia da tela Gravadores: nome do DVR = recorder_name se alguem ja
+// batizou, senao "DVR-NN" sequencial dentro do site -- calculado aqui de
+// novo porque esta tela carrega seu proprio _iaNvrTargets, independente do
+// estado da tela Gravadores.
+function computeIaNvrDvrNames() {
+  const siteByHost = {};
+  const nameByHost = {};
+  _iaNvrTargets.forEach(t => {
+    const host = t.host || '';
+    if (!host) return;
+    if (!siteByHost[host]) siteByHost[host] = t.site || t.local || '';
+    if (!nameByHost[host] && t.recorder_name) nameByHost[host] = t.recorder_name;
+  });
+  const hostsBySite = {};
+  Object.keys(siteByHost).forEach(host => {
+    (hostsBySite[siteByHost[host]] = hostsBySite[siteByHost[host]] || []).push(host);
+  });
+  const display = {};
+  Object.values(hostsBySite).forEach(hosts => {
+    hosts.sort((a, b) => a.localeCompare(b, 'pt', { numeric: true })).forEach((host, idx) => {
+      display[host] = nameByHost[host] || `DVR-${String(idx + 1).padStart(2, '0')}`;
+    });
+  });
+  return display;
+}
+
+function iaNvrCameraLabel(t) {
+  const titulo = t.title || '';
+  if (titulo && !camHasDefaultTitle({ titulo })) return titulo;
+  return `Camera ${String(t.channel || 0).padStart(2, '0')}`;
+}
+
+function populateIaNvrDvrSelect() {
+  const site = document.getElementById('iaNvrSite')?.value || '';
+  const sel = document.getElementById('iaNvrDvr');
+  if (!sel) return;
+  const names = computeIaNvrDvrNames();
+  const scoped = site ? _iaNvrTargets.filter(t => t.site === site) : _iaNvrTargets;
+  const hosts = [...new Set(scoped.map(t => t.host).filter(Boolean))]
+    .sort((a, b) => (names[a] || a).localeCompare(names[b] || b, 'pt', { numeric: true }));
+  const cur = sel.value;
+  sel.innerHTML = '<option value="">Todos os gravadores</option>' +
+    hosts.map(h => {
+      const total = scoped.filter(t => t.host === h).length;
+      const label = `${names[h] || h} (${total} camera${total !== 1 ? 's' : ''})`;
+      return `<option value="${esc(h)}"${h === cur ? ' selected' : ''}>${esc(label)}</option>`;
+    }).join('');
+  if (!hosts.includes(sel.value)) sel.value = '';
+}
+
 function populateIaNvrCameraSelect() {
   const site = document.getElementById('iaNvrSite')?.value || '';
+  const dvr = document.getElementById('iaNvrDvr')?.value || '';
   const sel = document.getElementById('iaNvrCamera');
   if (!sel) return;
-  const filtered = site ? _iaNvrTargets.filter(t => t.site === site) : _iaNvrTargets;
+  let filtered = site ? _iaNvrTargets.filter(t => t.site === site) : _iaNvrTargets;
+  if (dvr) filtered = filtered.filter(t => t.host === dvr);
+  filtered = [...filtered].sort((a, b) => (a.channel || 0) - (b.channel || 0));
   const cur = sel.value;
   sel.innerHTML = '<option value="">Selecione a camera</option>' +
     filtered.map(t => {
       const value = `${t.host}|${t.http_port}|${t.channel}`;
-      const label = `${t.title || ('Canal ' + t.channel)} - ${t.site || t.local || t.host}`;
+      const label = `CH${String(t.channel || 0).padStart(2, '0')} - ${iaNvrCameraLabel(t)}`;
       return `<option value="${esc(value)}"${value === cur ? ' selected' : ''}>${esc(label)}</option>`;
     }).join('');
 }
