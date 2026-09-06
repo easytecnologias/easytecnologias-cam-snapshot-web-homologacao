@@ -20,6 +20,13 @@ from app.services.recorder_media_service import (
 
 # Janela padrao por salto quando o usuario da um horario pontual em vez de intervalo.
 NVR_AI_SEARCH_WINDOW_MIN = int(os.getenv("NVR_AI_SEARCH_WINDOW_MIN", "5"))
+# Limite pra janela INICIAL pedida pelo usuario (nao os saltos, que ja sao
+# curtos por padrao). Medido ao vivo: um site com link fraco (1.6 MB/s)
+# levou ~5 minutos so pra baixar um segmento de 30 minutos de gravacao, e a
+# conversao de 30 minutos de video pra IA estourou os 180s de timeout do
+# ffmpeg -- sem esse limite, o operador pede uma janela grande (comum, "foi
+# por volta desse horario") e a busca trava por muito tempo sem avisar nada.
+NVR_AI_SEARCH_MAX_WINDOW_MIN = int(os.getenv("NVR_AI_SEARCH_MAX_WINDOW_MIN", "10"))
 NVR_AI_SEARCH_MAX_HOPS_DEFAULT = int(os.getenv("NVR_AI_SEARCH_MAX_HOPS", "3"))
 NVR_AI_SEARCH_MAX_HOPS_CAP = 6
 NVR_AI_SEARCH_MAX_TOTAL_SEC = int(os.getenv("NVR_AI_SEARCH_MAX_TOTAL_SEC", "180"))
@@ -184,7 +191,20 @@ def search_recordings(
 
     Chamadas ficam limitadas por construcao: no maximo 1 (semente) + 2 vizinhos por
     salto x max_hops saltos, com corte adicional por orcamento de tempo total.
+
+    Levanta ValueError se a janela pedida for maior que NVR_AI_SEARCH_MAX_WINDOW_MIN --
+    medido ao vivo: um site com link fraco levou ~5 min so pra baixar 30 min de
+    gravacao, e a conversao pra IA estourou o timeout do ffmpeg. Sem esse limite,
+    um pedido comum ("foi por volta desse horario", janela larga) trava a busca
+    por muito tempo sem avisar nada antes.
     """
+    janela_min = (end_dt - start_dt).total_seconds() / 60
+    if janela_min > NVR_AI_SEARCH_MAX_WINDOW_MIN:
+        raise ValueError(
+            f"Janela de {janela_min:.0f} min maior que o limite de "
+            f"{NVR_AI_SEARCH_MAX_WINDOW_MIN} min para busca por IA -- "
+            f"reduza o intervalo entre Inicio e Fim."
+        )
     max_hops = max(0, min(int(max_hops), NVR_AI_SEARCH_MAX_HOPS_CAP))
     deadline = time.time() + NVR_AI_SEARCH_MAX_TOTAL_SEC
     result = ChainedSearchResult()

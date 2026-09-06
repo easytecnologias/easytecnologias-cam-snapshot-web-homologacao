@@ -373,6 +373,15 @@ async function iaNvrRunSearch(e) {
   const query = document.getElementById('iaNvrQuery').value.trim();
   if (!query) return;
 
+  const inicioTxt = iaNvrDateTime('iaNvrStart');
+  const fimTxt = iaNvrDateTime('iaNvrEnd');
+  const janelaMin = (new Date(fimTxt.replace(' ', 'T')) - new Date(inicioTxt.replace(' ', 'T'))) / 60000;
+  if (!(janelaMin > 0)) { showToast('Fim precisa ser depois do Inicio.', true); return; }
+  if (janelaMin > 10) {
+    showToast(`Janela de ${Math.round(janelaMin)} min maior que o limite de 10 min -- reduza Inicio/Fim.`, true);
+    return;
+  }
+
   const btn = document.getElementById('btnIaSearch');
   const old = btn.innerHTML;
   btn.disabled = true;
