@@ -8,6 +8,7 @@ from typing import Any, Dict
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
+from app.api.endpoints.cameras import resolve_camera_password
 from app.services.gemini_video_search import GeminiNotConfiguredError, GeminiRateLimitedError
 from app.services.nvr_ai_service import list_nvr_targets, query_recording_segments
 from app.services.nvr_search_service import ChainedSearchResult, search_recordings
@@ -23,7 +24,7 @@ class NvrRecordingsRequest(BaseModel):
     channel: int = Field(default=1, ge=1, le=256)
     http_port: int = Field(default=80, ge=1, le=65535)
     user: str = "admin"
-    password: str
+    password: str = ""
     start_time: str
     end_time: str
     vendor: str = "auto"
@@ -34,7 +35,7 @@ class NvrSearchRequest(BaseModel):
     http_port: int = Field(default=80, ge=1, le=65535)
     channel: int = Field(ge=1, le=256)
     user: str = "admin"
-    password: str
+    password: str = ""
     site: str = ""
     start_time: str
     end_time: str
@@ -73,10 +74,22 @@ def api_ia_nvr_targets() -> Dict[str, Any]:
     return list_nvr_targets()
 
 
+def _resolve_ia_password(host: str, user: str, password: str) -> tuple[str, str]:
+    """Se o operador nao digitou senha, tenta a ja salva pra este DVR/camera
+    (mesmo deposito usado pelo botao Web) -- so pede pra digitar quando
+    nao existe nenhuma salva ainda."""
+    return resolve_camera_password(host, user, password)
+
+
 @router.post("/nvr/recordings")
 def api_ia_nvr_recordings(req: NvrRecordingsRequest) -> Dict[str, Any]:
+    user, password = _resolve_ia_password(req.host, req.user, req.password)
+    if not password:
+        raise HTTPException(status_code=400, detail="Sem senha salva para este gravador -- informe a senha.")
+    payload = req.model_dump()
+    payload["user"], payload["password"] = user, password
     try:
-        return query_recording_segments(req.model_dump())
+        return query_recording_segments(payload)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
@@ -90,6 +103,9 @@ def _run_search_job(job_id: str, req: NvrSearchRequest) -> None:
     job["status"] = "running"
     job["started_at"] = time.time()
     try:
+        user, password = _resolve_ia_password(req.host, req.user, req.password)
+        if not password:
+            raise ValueError("Sem senha salva para este gravador -- informe a senha.")
         start_dt = parse_dt(req.start_time)
         end_dt = parse_dt(req.end_time)
         if end_dt <= start_dt:
@@ -99,8 +115,8 @@ def _run_search_job(job_id: str, req: NvrSearchRequest) -> None:
             host=req.host,
             http_port=req.http_port,
             channel=req.channel,
-            user=req.user,
-            password=req.password,
+            user=user,
+            password=password,
             site=req.site,
             start_dt=start_dt,
             end_dt=end_dt,
