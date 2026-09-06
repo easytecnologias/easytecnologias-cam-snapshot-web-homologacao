@@ -2466,3 +2466,25 @@ pelo `camera_ip`; 3) "Camera NN" só se nem isso existir. Validado ao vivo
 com 383 câmeras reais carregadas -- canal com título serial e IP batendo
 mostrou corretamente o nome de cadastro ("01 - ENTRADA PERUCABA").
 Frontend-only, sem precisar de nova imagem da API.
+
+**Terceiro complemento, mesma tarde**: usuário apontou que o DVR já tem
+senha salva (mesmo depósito do botão Web), não fazia sentido digitar de
+novo na tela IA-NVR. Campo Senha deixou de ser obrigatório; quando vem em
+branco, `app/api/endpoints/ia.py` resolve via `resolve_camera_password`
+(mesma função de `cameras.py` usada pelo proxy web) antes de chamar o
+gravador. Se o operador digitar, fica salva pra próxima vez.
+
+**Limite real, sem risco, verificado ao vivo**: isso resolve pra câmera
+que é seu próprio gravador (a maioria do parque -- confirmado com uma
+câmera real da RADS que já tinha senha salva do botão Web). Pra um DVR de
+canal múltiplo de verdade (várias câmeras atrás de um só gravador, ex.
+PERUCABA `10.10.9.151`, 32 canais), o host do gravador não existe no
+cadastro de câmera nenhum -- tentei resolver e confirmei que NÃO acha nada
+(nem antes nem depois de "salvar"), mas `save_camera_credential` já trata
+mac/site vazio como no-op silencioso (linha própria do código: "sem MAC e
+sem site, não há o que lembrar"), então não há risco de um DVR sem
+cadastro de câmera roubar/misturar a senha de outro -- só continua
+pedindo a senha nesse caso, exatamente como antes. Se algum dia quiser
+resolver esse caso também, precisa de um depósito de credencial próprio
+pro HOST do gravador (não pelo `camera_ip`), que ainda não existe.
+Imagem final em produção (v2 e v3): `sightops-prod-api:20260906-iapass1`.
