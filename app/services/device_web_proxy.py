@@ -7,6 +7,7 @@ modulo fica em app/services/ especificamente pra continuar testavel.
 """
 from __future__ import annotations
 
+import threading
 from typing import Dict, Optional, Tuple
 from urllib.parse import urlunsplit
 
@@ -33,6 +34,36 @@ _PROBE_CONNECT_TIMEOUT = 1.5
 
 class DeviceUnreachable(Exception):
     pass
+
+
+# requests.request() abre e fecha uma Session nova a cada chamada -- sem
+# reuso de conexao, cada um dos dezenas de sub-recursos que a pagina de uma
+# camera carrega (JS/CSS/imagem) paga o handshake TCP inteiro de novo. Uma
+# Session por host reaproveita a conexao (keep-alive), o que importa muito
+# mais em sites com latencia real (link ruim, 4G/satelite) do que qualquer
+# ajuste de timeout. Session/urllib3 sao seguros pra uso concorrente entre
+# threads (fetch_device roda via asyncio.to_thread), desde que nao se altere
+# estado da sessao (headers/cookies) entre chamadas -- e nao alteramos.
+_sessions: Dict[str, requests.Session] = {}
+_sessions_lock = threading.Lock()
+
+
+def _session_for(host: str) -> requests.Session:
+    sessao = _sessions.get(host)
+    if sessao is None:
+        with _sessions_lock:
+            sessao = _sessions.get(host)
+            if sessao is None:
+                sessao = requests.Session()
+                # pool maior que o padrao (10): o navegador abre ate 6
+                # conexoes concorrentes por host, e cada uma vira uma thread
+                # aqui (asyncio.to_thread) batendo na mesma Session -- sem
+                # isso o urllib3 descarta conexao ociosa em vez de reusar.
+                adaptador = requests.adapters.HTTPAdapter(pool_connections=1, pool_maxsize=20)
+                sessao.mount("http://", adaptador)
+                sessao.mount("https://", adaptador)
+                _sessions[host] = sessao
+    return sessao
 
 
 def get_cached_scheme(host: str) -> str:
@@ -94,6 +125,7 @@ def fetch_device(
     ultimo_erro: Optional[Exception] = None
     resposta: Optional[requests.Response] = None
     scheme_usado = ""
+    sessao = _session_for(host)
 
     try:
         schemes = _tentar_schemes(host)
@@ -106,7 +138,7 @@ def fetch_device(
             eh_as_cegas = scheme == "https" and _scheme_cache.get(host) != "https"
             tentativa_timeout = (_PROBE_CONNECT_TIMEOUT, timeout[1]) if eh_as_cegas else timeout
             try:
-                resposta = requests.request(
+                resposta = sessao.request(
                     method, url, headers=headers,
                     data=body if body else None,
                     timeout=tentativa_timeout, allow_redirects=False, verify=False, auth=auth,
@@ -128,7 +160,7 @@ def fetch_device(
             and "digest" in (resposta.headers.get("WWW-Authenticate") or "").lower()
         ):
             url = build_target_url(scheme_usado, host, path, query, http_port)
-            resposta = requests.request(
+            resposta = sessao.request(
                 method, url, headers=headers,
                 data=body if body else None,
                 timeout=timeout, allow_redirects=False, verify=False,

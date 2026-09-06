@@ -1262,6 +1262,61 @@ def _host_in_recorder_inventory(host: str) -> bool:
     return _recorder_row_for_host(host) is not None
 
 
+# js/css/imagem/fonte da propria interface da camera/DVR nao mudam entre
+# requisicoes (nem dependem de sessao/login) -- so o conteudo dinamico
+# (paginas html, RPC/cgi) muda de verdade. Sem cache, toda visita a mesma
+# camera baixa de novo dezenas de arquivos identicos do equipamento, e o
+# custo dominante nesse caso e a latencia real do link ate o site (nao da
+# pra reduzir isso no proxy), entao cachear os estaticos e o que realmente
+# corta requisicao. TTL curto o bastante pra nao incomodar se um firmware
+# for atualizado, generoso o bastante pra valer a pena.
+_STATIC_CACHE_TTL_SECONDS = 3600
+_STATIC_CACHE_MAX_ENTRIES = 500
+_STATIC_CACHE_EXTENSIONS = (
+    ".js", ".css", ".png", ".jpg", ".jpeg", ".gif", ".ico", ".svg",
+    ".woff", ".woff2", ".ttf", ".eot",
+)
+_static_cache: Dict[str, tuple[float, int, bytes, str]] = {}
+
+
+def _is_static_device_asset(path: str) -> bool:
+    limpo = str(path or "").split("?", 1)[0].lower()
+    return limpo.endswith(_STATIC_CACHE_EXTENSIONS)
+
+
+def _static_cache_key(ip: str, path: str, query: str) -> str:
+    # escopado por tenant: o mesmo IP privado/CGNAT pode ser um equipamento
+    # DIFERENTE em outro cliente (faixas privadas se repetem entre tenants
+    # neste sistema) -- sem isso, um arquivo cacheado da camera do tenant A
+    # vazaria pro tenant B que por coincidencia usa o mesmo IP interno.
+    return f"{get_current_tenant_slug()}:{ip}:{path}?{query}"
+
+
+def _static_cache_get(chave: str) -> Optional[tuple[int, bytes, str]]:
+    entrada = _static_cache.get(chave)
+    if entrada is None:
+        return None
+    expira_em, status_code, conteudo, media_type = entrada
+    if expira_em < time.time():
+        _static_cache.pop(chave, None)
+        return None
+    return status_code, conteudo, media_type
+
+
+def _static_cache_put(chave: str, status_code: int, conteudo: bytes, media_type: str) -> None:
+    if len(_static_cache) >= _STATIC_CACHE_MAX_ENTRIES and chave not in _static_cache:
+        agora = time.time()
+        vencidas = [k for k, v in _static_cache.items() if v[0] < agora]
+        if vencidas:
+            for k in vencidas:
+                _static_cache.pop(k, None)
+        else:
+            # nada vencido ainda e o cache lotou -- descarta tudo em vez de
+            # crescer sem limite; o custo de um miss e so refazer o fetch.
+            _static_cache.clear()
+    _static_cache[chave] = (time.time() + _STATIC_CACHE_TTL_SECONDS, status_code, conteudo, media_type)
+
+
 @router.api_route("/maintenance/web/{ip}/", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"])
 @router.api_route("/maintenance/web/{ip}/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"])
 async def maintenance_camera_web_proxy(ip: str, request: Request, path: str = ""):
@@ -1270,6 +1325,18 @@ async def maintenance_camera_web_proxy(ip: str, request: Request, path: str = ""
     # fora do inventario do tenant) -- a URL de fato usada no fetch vem de
     # fetch_device, que tenta https e http.
     _camera_web_target_url(ip, path, str(request.url.query or ""))
+
+    query = str(request.url.query or "")
+    cacheavel = request.method == "GET" and _is_static_device_asset(path)
+    chave_cache = _static_cache_key(ip, path, query) if cacheavel else ""
+    if cacheavel:
+        do_cache = _static_cache_get(chave_cache)
+        if do_cache is not None:
+            status_code, conteudo, media_type = do_cache
+            return Response(
+                content=conteudo, status_code=status_code, media_type=media_type,
+                headers={"Cache-Control": "no-store", "X-Frame-Options": "SAMEORIGIN", "X-SightOps-Proxy-Cache": "hit"},
+            )
 
     headers: dict[str, str] = {
         "User-Agent": request.headers.get("user-agent") or "SightOps device web proxy",
@@ -1309,7 +1376,7 @@ async def maintenance_camera_web_proxy(ip: str, request: Request, path: str = ""
         # paralelo.
         upstream = await asyncio.to_thread(
             fetch_device,
-            ip, path, str(request.url.query or ""), request.method, headers, body,
+            ip, path, query, request.method, headers, body,
             username=username, password=password, http_port=_device_http_port(ip),
         )
     except DeviceUnreachable as exc:
@@ -1332,6 +1399,8 @@ async def maintenance_camera_web_proxy(ip: str, request: Request, path: str = ""
 
     media_type = upstream.headers.get("content-type") or "application/octet-stream"
     content = _rewrite_camera_web_content(upstream.content or b"", ip=ip, content_type=media_type)
+    if cacheavel and upstream.status_code == 200 and not set_cookie:
+        _static_cache_put(chave_cache, upstream.status_code, content, media_type)
     return Response(content=content, status_code=upstream.status_code, media_type=media_type, headers=resp_headers)
 
 
