@@ -1776,6 +1776,12 @@ function camHasDefaultTitle(c) {
     /^intelbras\s*vip/i,
     /^vip-\d/i,
     /vip[-\s]?\d/i,
+    // serial de fabrica que o proprio DVR/NVR reporta como nome de canal
+    // quando ninguem nunca renomeou (ex: "7KOM0204255LX", "YP6K2403581TB") --
+    // alfanumerico solido, sem espaco/hifen, MISTURANDO letra e digito
+    // (exige pelo menos 1 digito, senao "PORTARIA"/"RECEPCAO" -- nome real
+    // de uma palavra so, sem espaco -- cairia aqui por engano).
+    /^(?=.*[0-9])[a-z0-9]{8,16}$/,
   ].some(rx => rx.test(title));
 }
 

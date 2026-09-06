@@ -116,6 +116,37 @@ async function openDashDrawerRecorder(source, filterKey, activeSite) {
   const isOffline = r => ['offline','down','inativo','inactive','auth_failed','timeout','erro','error','video_loss'].includes((r.status||'').toLowerCase());
   const rowSite   = r => String(r.local || r.site || r.site_name || '').trim();
 
+  // Mesmo nome de gravador (DVR-NN ou o que o usuario ja batizou) usado na
+  // tela Gravadores -- calculado aqui de novo porque o dashboard carrega
+  // seu proprio snapshot do inventario (_dashDrawerData), independente do
+  // estado da tela de Gravadores.
+  const dvrNameByHost = (() => {
+    const siteByHost = {};
+    const nameByHost = {};
+    rows.forEach(r => {
+      const host = r.host || r.ip || '';
+      if (!host) return;
+      if (!siteByHost[host]) siteByHost[host] = rowSite(r);
+      if (!nameByHost[host] && r.recorder_name) nameByHost[host] = r.recorder_name;
+    });
+    const hostsBySite = {};
+    Object.keys(siteByHost).forEach(host => {
+      (hostsBySite[siteByHost[host]] = hostsBySite[siteByHost[host]] || []).push(host);
+    });
+    const display = {};
+    Object.values(hostsBySite).forEach(hosts => {
+      hosts.sort((a, b) => a.localeCompare(b, 'pt', { numeric: true })).forEach((host, idx) => {
+        display[host] = nameByHost[host] || `DVR-${String(idx + 1).padStart(2, '0')}`;
+      });
+    });
+    return display;
+  })();
+  const dvrChannelLabel = r => {
+    const titulo = r.title || r.titulo || '';
+    if (titulo && !camHasDefaultTitle({ titulo })) return titulo;
+    return `Camera ${String(r.channel || 0).padStart(2, '0')}`;
+  };
+
   const sites = [...new Set(rows.map(rowSite).filter(Boolean))].sort((a,b) => a.localeCompare(b,'pt'));
   if (activeSite && !sites.includes(activeSite)) activeSite = null;
   const siteRows = activeSite ? rows.filter(r => rowSite(r) === activeSite) : rows;
@@ -141,11 +172,12 @@ async function openDashDrawerRecorder(source, filterKey, activeSite) {
     const src = r._dashRecorderSource || source || 'nvr';
     const view = src === 'dvr' ? 'inv-dvr' : 'inv-nvr';
     const typeBadge = source === 'all' ? `<span class="drawer-mini-badge">${src === 'dvr' ? 'DVR' : 'NVR'}</span>` : '';
+    const dvrNome = dvrNameByHost[r.host || r.ip || ''] || (r.host || r.ip || '');
     return `<div class="drawer-item" style="cursor:pointer" onclick="_drawerGoToInventory('${view}','${host}')" title="Abrir no inventario">
       ${_drawerStatusDot(r.status)}
       <div class="drawer-item-main">
-        <div class="drawer-item-title">CH${String(r.channel||0).padStart(2,'0')} ${typeBadge} ${esc(r.title || r.titulo || '')}</div>
-        <div class="drawer-item-sub">${esc(r.host||r.ip||'')}  ${esc(rowSite(r))}</div>
+        <div class="drawer-item-title">CH${String(r.channel||0).padStart(2,'0')} ${typeBadge} ${esc(dvrChannelLabel(r))}</div>
+        <div class="drawer-item-sub">${esc(dvrNome)}  ${esc(rowSite(r))}</div>
       </div>
       ${r.snapshot_url ? `<img src="${esc(r.snapshot_url)}" style="width:52px;height:36px;object-fit:cover;border-radius:4px;flex-shrink:0" loading="lazy">` : '<span style="width:52px;flex-shrink:0"></span>'}
       <i data-lucide="chevron-right" style="width:13px;height:13px;color:var(--muted);flex-shrink:0"></i>

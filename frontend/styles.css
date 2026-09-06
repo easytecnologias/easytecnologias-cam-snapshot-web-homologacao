@@ -3804,6 +3804,12 @@ a { color: inherit; text-decoration: none; }
 .nvr-row-offline td { color: #9e6b6b !important; }
 .nvr-row-offline td strong { color: var(--danger) !important; }
 
+/* Cabecalho de grupo (um DVR/NVR) na tabela de Gravadores -- separa
+   visualmente "site > gravador > cameras" dentro da mesma tabela plana. */
+.rec-group-header { background: var(--surface-2, #f3f4f6); position: sticky; top: 0; z-index: 1; }
+.rec-group-header td { padding: 8px 10px; border-top: 2px solid var(--border); }
+.rec-group-header:hover { background: var(--surface-3, #e9ebef); }
+
 /* ── SCAN OPTIONS ── */
 .scan-section-label {
   font-size: 11px;
@@ -9127,6 +9133,225 @@ body.shell-owner .nav-item.active { box-shadow: inset 3px 0 #c9962c; }
   #viewAccessWhatsappTriage .access-triage-form,
   #viewAccessWhatsappTriage .access-triage-preview,
   #viewAccessWhatsappTriage .access-triage-filters { grid-template-columns: 1fr; }
+}
+
+/* --- Messenger (historico de WhatsApp do controle de acesso) --- */
+#viewAccessMessenger .access-messenger-shell {
+  display: grid;
+  grid-template-columns: minmax(300px, .8fr) minmax(420px, 1.2fr);
+  gap: 16px;
+  align-items: stretch;
+  height: calc(100vh - 260px);
+  min-height: 460px;
+}
+#viewAccessMessenger .access-messenger-list-panel,
+#viewAccessMessenger .access-messenger-chat-panel {
+  min-width: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+#viewAccessMessenger .panel-header { background: var(--surface-soft); flex: none; }
+#viewAccessMessenger .access-messenger-search { margin: 12px 16px 0; flex: none; }
+#viewAccessMessenger .access-messenger-conv-list {
+  display: grid;
+  align-content: start;
+  gap: 2px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 10px;
+}
+#viewAccessMessenger .access-messenger-conv-list:has(> .access-messenger-empty:only-child) { align-content: center; }
+#viewAccessMessenger .access-messenger-conv-item {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+  position: relative;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  padding: 10px 12px 10px 10px;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  transition: background .12s;
+}
+#viewAccessMessenger .access-messenger-conv-item::before {
+  content: '';
+  position: absolute;
+  left: 0; top: 8px; bottom: 8px;
+  width: 3px;
+  border-radius: 999px;
+  background: var(--primary);
+  opacity: 0;
+  transition: opacity .12s;
+}
+#viewAccessMessenger .access-messenger-conv-item:hover { background: var(--surface-soft); }
+#viewAccessMessenger .access-messenger-conv-item.active { background: var(--primary-soft); }
+#viewAccessMessenger .access-messenger-conv-item.active::before { opacity: 1; }
+#viewAccessMessenger .access-messenger-avatar {
+  width: 44px; height: 44px; border-radius: 999px;
+  display: grid; place-items: center;
+  font-size: 16px; font-weight: 700;
+  flex: none;
+}
+#viewAccessMessenger .access-messenger-avatar svg { width: 19px; height: 19px; }
+#viewAccessMessenger .access-messenger-avatar.p1 { background: var(--primary-soft); color: var(--primary); }
+#viewAccessMessenger .access-messenger-avatar.p2 { background: var(--blue-soft); color: var(--blue); }
+#viewAccessMessenger .access-messenger-avatar.p3 { background: var(--cyan-soft); color: var(--cyan); }
+#viewAccessMessenger .access-messenger-avatar.p4 { background: var(--amber-soft); color: var(--amber); }
+#viewAccessMessenger .access-messenger-avatar.p5 { background: #f1e7fb; color: #7048b0; }
+#viewAccessMessenger .access-messenger-avatar.p6 { background: #ffe3ee; color: #c2287a; }
+#viewAccessMessenger .access-messenger-conv-info { min-width: 0; display: grid; gap: 3px; }
+#viewAccessMessenger .access-messenger-conv-top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; min-width: 0; }
+#viewAccessMessenger .access-messenger-conv-top strong { font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#viewAccessMessenger .access-messenger-conv-time { font-size: 11px; color: var(--muted); flex: none; }
+#viewAccessMessenger .access-messenger-conv-preview,
+#viewAccessMessenger .access-messenger-conv-sub {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 12px; color: var(--muted);
+  display: flex; align-items: center; gap: 4px;
+}
+#viewAccessMessenger .access-messenger-conv-preview span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#viewAccessMessenger .access-messenger-dir-icon { width: 12px; height: 12px; flex: none; }
+#viewAccessMessenger .access-messenger-dir-icon.out { color: var(--primary); }
+#viewAccessMessenger .access-messenger-dir-icon.in { color: var(--blue); }
+#viewAccessMessenger .access-messenger-conv-sub { color: var(--muted); font-size: 11.5px; }
+#viewAccessMessenger .access-messenger-chat-header { justify-content: flex-start; align-items: center; gap: 12px; }
+#viewAccessMessenger .access-messenger-chat-header h2,
+#viewAccessMessenger .access-messenger-chat-header p { text-align: left; }
+#viewAccessMessenger .access-messenger-chat-header .access-messenger-avatar { width: 38px; height: 38px; font-size: 14px; }
+#viewAccessMessenger .access-messenger-thread {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 18px 20px;
+  background-color: #eef2f0;
+  background-image:
+    radial-gradient(rgba(8, 127, 91, .05) 1px, transparent 1px);
+  background-size: 16px 16px;
+}
+#viewAccessMessenger .access-messenger-thread .access-messenger-empty { margin: auto; }
+#viewAccessMessenger .access-messenger-footer {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+  background: var(--surface-soft);
+  color: var(--muted);
+}
+#viewAccessMessenger .access-messenger-footer svg { width: 15px; height: 15px; flex: none; }
+#viewAccessMessenger .access-messenger-footer input {
+  flex: 1;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 9px 14px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 12.5px;
+  cursor: not-allowed;
+}
+#viewAccessMessenger .access-messenger-day-divider { display: flex; justify-content: center; margin: 10px 0 14px; }
+#viewAccessMessenger .access-messenger-day-divider span {
+  background: rgba(255,255,255,.9);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: capitalize;
+  padding: 4px 12px;
+  border-radius: 999px;
+}
+#viewAccessMessenger .access-messenger-bubble-row { display: flex; margin: 2px 0; }
+#viewAccessMessenger .access-messenger-bubble-row.out { justify-content: flex-end; }
+#viewAccessMessenger .access-messenger-bubble-row.in { justify-content: flex-start; }
+#viewAccessMessenger .access-messenger-bubble {
+  max-width: 72%;
+  border-radius: 12px;
+  padding: 9px 11px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 13.5px;
+  box-shadow: 0 1px 2px rgba(23,32,38,.08);
+}
+#viewAccessMessenger .access-messenger-bubble.out { background: var(--primary-soft); border: 1px solid rgba(8, 127, 91, .16); border-bottom-right-radius: 3px; }
+#viewAccessMessenger .access-messenger-bubble.in { background: #fff; border: 1px solid var(--border); border-bottom-left-radius: 3px; }
+#viewAccessMessenger .access-messenger-bubble-text { line-height: 1.45; }
+#viewAccessMessenger .access-messenger-bubble-error {
+  margin-top: 6px; font-size: 11.5px; color: var(--danger);
+  background: var(--danger-soft); border-radius: 6px; padding: 4px 7px;
+}
+#viewAccessMessenger .access-messenger-bubble-meta {
+  display: flex; justify-content: flex-end; align-items: center; gap: 4px;
+  margin-top: 3px; font-size: 10.5px; color: var(--muted);
+}
+#viewAccessMessenger .access-messenger-tick { color: var(--muted); letter-spacing: -1px; }
+#viewAccessMessenger .access-messenger-tick.read { color: var(--blue); }
+#viewAccessMessenger .access-messenger-tick.failed { color: var(--danger); font-weight: 700; letter-spacing: 0; }
+#viewAccessMessenger .access-messenger-empty {
+  min-height: 120px;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  color: var(--muted);
+  font-size: 13px;
+  background: var(--surface-soft);
+}
+@media (max-width: 1100px) {
+  #viewAccessMessenger .access-messenger-shell { grid-template-columns: 1fr; }
+}
+#viewAccessMessenger .access-messenger-page-footer {
+  margin-top: 16px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 18px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+}
+#viewAccessMessenger .access-messenger-stats { display: flex; flex-wrap: wrap; gap: 8px; }
+#viewAccessMessenger .access-messenger-stat-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: var(--surface-soft);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+#viewAccessMessenger .access-messenger-stat-chip svg { width: 13px; height: 13px; }
+#viewAccessMessenger .access-messenger-stat-chip.ok { background: var(--primary-soft); border-color: rgba(8,127,91,.2); color: var(--primary); }
+#viewAccessMessenger .access-messenger-stat-chip.warn { background: var(--amber-soft); border-color: rgba(184,107,0,.25); color: var(--amber); }
+#viewAccessMessenger .access-messenger-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+#viewAccessMessenger .access-messenger-legend span { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+#viewAccessMessenger .access-messenger-legend .access-messenger-tick { font-size: 12px; }
+#viewAccessMessenger .access-messenger-legend-sep { width: 1px; height: 14px; background: var(--border); }
+@media (max-width: 900px) {
+  #viewAccessMessenger .access-messenger-page-footer { flex-direction: column; align-items: flex-start; }
 }
 
 /* --- previa da importacao de planilha --- */

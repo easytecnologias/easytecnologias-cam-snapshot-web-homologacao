@@ -39,6 +39,7 @@ let _nvrAbortCtrl = null;
 let _recActive    = null;
 let _recAction    = null;
 let _nvrActiveScan = null;
+const _recCollapsedHosts = new Set();
 
 function _recSessionSave(type, mode, rows) {
   try { sessionStorage.setItem(`so_${type}_${mode}`, JSON.stringify(rows)); } catch {}
@@ -215,6 +216,16 @@ function recHasDefaultTitle(r) {
   return camHasDefaultTitle({ titulo: r.title });
 }
 
+// Nome amigavel pra mostrar na tabela: se o titulo que veio do gravador for
+// generico/serial (recHasDefaultTitle), mostra "Camera NN" em vez do lixo --
+// so na exibicao, nao mexe no dado guardado (o titulo real continua no
+// tooltip e disponivel pra quem quiser editar de verdade).
+function recDisplayTitle(r) {
+  if (r.title && !recHasDefaultTitle(r)) return r.title;
+  const ch = Number(r.channel);
+  return `Camera ${Number.isFinite(ch) && ch > 0 ? String(ch).padStart(2, '0') : '?'}`;
+}
+
 function recHasNoCamera(r) {
   return _recType === 'nvr'
     ? [r.camera_ip, r.camera_model || r.modelo, r.camera_mac || r.mac].some(_isBlankValue)
@@ -233,7 +244,7 @@ const NVR_COLS = {
       `<span class="monospace" title="${esc(r.host||'')}">${esc(r.host||'')}</span>`,
       `<span class="text-muted" title="${esc(r.nvr_model||'')}">${esc(r.nvr_model||'')}</span>`,
       `<span style="text-align:center;display:block">${esc(String(r.channel??''))}</span>`,
-      `<strong title="${esc(r.title||'')}">${esc(r.title||'')}</strong>`,
+      `<strong title="${esc(r.title||'')}">${esc(recDisplayTitle(r))}</strong>`,
       `<span title="${esc(r.local||'')}">${esc(r.local||'')}</span>`,
       (r.status||'').toLowerCase()==='online'
         ? `<span style="color:var(--primary);font-weight:600;font-size:12px">online</span>`
@@ -255,7 +266,7 @@ const NVR_COLS = {
       `<input type="checkbox" class="chk-nvr" value="${esc(r.host+'_'+r.channel)}" data-host="${esc(r.host||'')}" data-channel="${esc(String(r.channel||''))}">`,
       `<span class="monospace" title="${esc(r.host||'')}">${esc(r.host||'')}</span>`,
       `<span style="text-align:center;display:block">${esc(String(r.channel??''))}</span>`,
-      `<strong title="${esc(r.title||'')}">${esc(r.title||'')}</strong>`,
+      `<strong title="${esc(r.title||'')}">${esc(recDisplayTitle(r))}</strong>`,
       `<span title="${esc(r.local||'')}">${esc(r.local||'')}</span>`,
       (r.status||'').toLowerCase()==='online'
         ? `<span style="color:var(--primary);font-weight:600;font-size:12px">online</span>`
@@ -276,7 +287,7 @@ const NVR_COLS = {
       `<input type="checkbox" class="chk-nvr" value="${esc(r.host+'_'+r.channel)}" data-host="${esc(r.host||'')}" data-channel="${esc(String(r.channel||''))}">`,
       `<span class="monospace" title="${esc(r.host||'')}">${esc(r.host||'')}</span>`,
       `<span style="text-align:center;display:block">${esc(String(r.channel??''))}</span>`,
-      `<strong title="${esc(r.title||'')}">${esc(r.title||'')}</strong>`,
+      `<strong title="${esc(r.title||'')}">${esc(recDisplayTitle(r))}</strong>`,
       `<span title="${esc(r.local||'')}">${esc(r.local||'')}</span>`,
       (r.status||'').toLowerCase()==='online'
         ? `<span style="color:var(--primary);font-weight:600;font-size:12px">online</span>`
@@ -299,7 +310,7 @@ const DVR_COLS = {
       `<input type="checkbox" class="chk-nvr" value="${esc(r.host+'_'+r.channel)}" data-host="${esc(r.host||'')}" data-channel="${esc(String(r.channel||''))}">`,
       `<span class="monospace" title="${esc(r.host||'')}">${esc(r.host||'')}</span>`,
       `<span style="text-align:center;display:block">${esc(String(r.channel??''))}</span>`,
-      `<strong title="${esc(r.title||'')}">${esc(r.title||'')}</strong>`,
+      `<strong title="${esc(r.title||'')}">${esc(recDisplayTitle(r))}</strong>`,
       `<span title="${esc(r.local||'')}">${esc(r.local||'')}</span>`,
       (r.status||'').toLowerCase()==='online'
         ? `<span style="color:var(--primary);font-weight:600;font-size:12px">online</span>`
@@ -319,7 +330,7 @@ const DVR_COLS = {
       `<input type="checkbox" class="chk-nvr" value="${esc(r.host+'_'+r.channel)}" data-host="${esc(r.host||'')}" data-channel="${esc(String(r.channel||''))}">`,
       `<span class="monospace" title="${esc(r.host||'')}">${esc(r.host||'')}</span>`,
       `<span style="text-align:center;display:block">${esc(String(r.channel??''))}</span>`,
-      `<strong title="${esc(r.title||'')}">${esc(r.title||'')}</strong>`,
+      `<strong title="${esc(r.title||'')}">${esc(recDisplayTitle(r))}</strong>`,
       `<span title="${esc(r.local||'')}">${esc(r.local||'')}</span>`,
       (r.status||'').toLowerCase()==='online'
         ? `<span style="color:var(--primary);font-weight:600;font-size:12px">online</span>`
@@ -339,7 +350,7 @@ const DVR_COLS = {
       `<input type="checkbox" class="chk-nvr" value="${esc(r.host+'_'+r.channel)}" data-host="${esc(r.host||'')}" data-channel="${esc(String(r.channel||''))}">`,
       `<span class="monospace" title="${esc(r.host||'')}">${esc(r.host||'')}</span>`,
       `<span style="text-align:center;display:block">${esc(String(r.channel??''))}</span>`,
-      `<strong title="${esc(r.title||'')}">${esc(r.title||'')}</strong>`,
+      `<strong title="${esc(r.title||'')}">${esc(recDisplayTitle(r))}</strong>`,
       `<span title="${esc(r.local||'')}">${esc(r.local||'')}</span>`,
       (r.status||'').toLowerCase()==='online'
         ? `<span style="color:var(--primary);font-weight:600;font-size:12px">online</span>`
@@ -496,6 +507,70 @@ function applyNvrFilters() {
   renderNvrTable(filtered);
 }
 
+// Nome de exibicao de cada gravador (host): usa recorder_name se alguem ja
+// batizou (via renameDvrGroup), senao um "DVR-NN" sequencial DENTRO DO SITE
+// -- calculado sobre TODAS as linhas do tipo atual (nao so as filtradas),
+// pra o numero de cada DVR ficar estavel mesmo trocando filtro/busca.
+function computeDvrDisplayNames() {
+  const all = Object.values(_currentRecStore()).flat();
+  const siteByHost = {};
+  const nameByHost = {};
+  all.forEach(r => {
+    const host = r.host || '';
+    if (!host) return;
+    if (!siteByHost[host]) siteByHost[host] = r.site || r.local || '';
+    if (!nameByHost[host] && r.recorder_name) nameByHost[host] = r.recorder_name;
+  });
+  const hostsBySite = {};
+  Object.keys(siteByHost).forEach(host => {
+    const site = siteByHost[host];
+    (hostsBySite[site] = hostsBySite[site] || []).push(host);
+  });
+  const display = {};
+  Object.values(hostsBySite).forEach(hosts => {
+    hosts.sort(compareIpv4).forEach((host, idx) => {
+      display[host] = nameByHost[host] || `DVR-${String(idx + 1).padStart(2, '0')}`;
+    });
+  });
+  return display;
+}
+
+function toggleDvrGroup(host) {
+  if (_recCollapsedHosts.has(host)) _recCollapsedHosts.delete(host);
+  else _recCollapsedHosts.add(host);
+  applyNvrFilters();
+}
+
+async function renameDvrGroup(host) {
+  const store = _currentRecStore();
+  const rowsForHost = Object.values(store).flat().filter(r => String(r.host || '') === host);
+  if (!rowsForHost.length) return;
+  const current = computeDvrDisplayNames()[host] || '';
+  const nome = window.prompt(`Nome deste gravador (${host}):`, current.startsWith('DVR-') ? '' : current);
+  if (nome === null) return;
+  const novoNome = nome.trim();
+  if (!novoNome) return;
+
+  const payloadItems = rowsForHost.map(r => ({
+    host: r.host,
+    channel: r.channel,
+    remote_connector_id: r.remote_connector_id || r.connector_id || '',
+    recorder_name: novoNome,
+  }));
+  const endpoint = _recType === 'dvr' ? '/api/dvr/save' : '/api/nvr/save';
+  try {
+    const res = await api(endpoint, { method: 'POST', body: JSON.stringify({ recorders: payloadItems }) });
+    const body = await res?.json().catch(() => ({}));
+    if (!res?.ok || body?.ok === false) throw new Error(body?.detail || body?.error || 'Falha ao salvar.');
+    rowsForHost.forEach(r => { r.recorder_name = novoNome; });
+    ['basico', 'olt', 'switch'].forEach(mode => { if (store[mode]?.length) _recSessionSave(_recType, mode, store[mode]); });
+    showToast('Gravador renomeado.');
+    applyNvrFilters();
+  } catch (err) {
+    showToast(err.message || 'Falha ao renomear o gravador.', true);
+  }
+}
+
 function renderNvrTable(rows) {
   const def   = _currentColDef();
   const tbody = document.getElementById('invNvrTable');
@@ -519,17 +594,43 @@ function renderNvrTable(rows) {
     return;
   }
 
-  tbody.innerHTML = rows.map(r => {
+  const displayNames = computeDvrDisplayNames();
+  const colspan = def.cols.length;
+  let lastHost = null;
+  const pieces = [];
+  rows.forEach(r => {
+    const host = r.host || '';
+    if (host !== lastHost) {
+      lastHost = host;
+      const collapsed = _recCollapsedHosts.has(host);
+      const nome = displayNames[host] || host;
+      const total = rows.filter(x => (x.host || '') === host).length;
+      pieces.push(`<tr class="rec-group-header" data-group-host="${esc(host)}">
+        <td colspan="${colspan}">
+          <span class="rec-group-toggle" onclick="toggleDvrGroup('${esc(host)}')" style="cursor:pointer;display:inline-flex;align-items:center;gap:6px">
+            <i data-lucide="${collapsed ? 'chevron-right' : 'chevron-down'}" style="width:14px;height:14px"></i>
+            <strong>${esc(nome)}</strong>
+            <span class="text-muted monospace" style="font-size:11px">${esc(host)}</span>
+            <span class="text-muted" style="font-size:11px">${total} camera${total !== 1 ? 's' : ''}</span>
+          </span>
+          <button class="ghost-action" style="padding:2px 6px;font-size:11px;margin-left:8px" onclick="event.stopPropagation();renameDvrGroup('${esc(host)}')" title="Renomear gravador">
+            <i data-lucide="pencil" style="width:12px;height:12px"></i>
+          </button>
+        </td>
+      </tr>`);
+    }
+    if (_recCollapsedHosts.has(host)) return;
     const isOnline = (r.status||'').toLowerCase() === 'online';
     const cells = def.row(r);
-    return `<tr class="inv-nvr-row${isOnline?'':' nvr-row-offline'}" data-key="${esc(r.host+'_'+r.channel)}" style="cursor:pointer">
+    pieces.push(`<tr class="inv-nvr-row${isOnline?'':' nvr-row-offline'}" data-key="${esc(r.host+'_'+r.channel)}" style="cursor:pointer">
       ${cells.map((cell, i) =>
         i === 0
           ? `<td onclick="event.stopPropagation()">${cell}</td>`
           : `<td>${cell}</td>`
       ).join('')}
-    </tr>`;
-  }).join('');
+    </tr>`);
+  });
+  tbody.innerHTML = pieces.join('');
 
   document.getElementById('chkNvrAll').onchange = function() {
     document.querySelectorAll('.chk-nvr').forEach(c => c.checked = this.checked);
