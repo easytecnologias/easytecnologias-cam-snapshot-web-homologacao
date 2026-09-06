@@ -2270,3 +2270,64 @@ interromper o trabalho; os dois releases continuaram saudáveis o tempo
 todo, a queda foi só do lado do acesso, não do servidor.
 
 Imagem final em produção (v2 e v3): `sightops-prod-api:20260906-webproxylat5`.
+
+## 2026-09-06 (manhã) — Botão "Web": Cloudflare bypass total + pool de 8 threads era o gargalo real
+
+Usuário testou o fix acima ("não senti diferença alguma, continua péssimo")
+e topou testar ao vivo comigo via skill `navegador-chrome`. Achado usando o
+Chrome real dele (perfil limpo, login manual, CDP): duas câmeras Intelbras
+reais analisadas com `performance.getEntriesByType('resource')` direto no
+DevTools.
+
+**Achado 1 — Cloudflare nunca cacheava nada deste proxy.** Toda resposta
+saía com `Cache-Control: no-store`, então `cf-cache-status: BYPASS` em
+100% das requisições -- cada sub-recurso (mesmo estático, idêntico sempre)
+tinha que ir da borda do Cloudflare até a origem pelo túnel. Corrigido:
+estático (mesmo conjunto de extensões do cache em memória) com `200` e sem
+`Set-Cookie` agora sai `Cache-Control: public, max-age=1800`; tudo mais
+continua `no-store`, sem exceção -- decisão sobrescreve explicitamente
+qualquer `Cache-Control` que a própria câmera mande (`filter_response_headers`
+deixava passar). Medido ao vivo, mesmo arquivo, três pedidos seguidos:
+`MISS` (2.4s) → `EXPIRED` (0.3s) → `HIT` (67ms).
+
+**Achado 2 (o que realmente importava) — pool de threads de 8, compartilhado
+com o app inteiro.** `asyncio.to_thread` usa o executor padrão do processo
+(`min(32, cpu_count+4)`); neste servidor `cpu_count=4`, ou seja, **8
+threads no total para toda a API** -- controle de acesso, ferramentas de
+OLT, tudo que usa `to_thread` disputa o mesmo pool. Uma única página de
+câmera carrega 50-60+ sub-recursos de uma vez; sozinha já estoura o pool, e
+ainda briga com qualquer outra coisa rodando na mesma hora. Medido ao vivo
+na câmera de EASY TECNOLOGIAS (JARDINS I, `10.10.10.22`): arquivos
+individuais levando **27-32 segundos**, com `DOMContentLoaded` em 22-33s,
+enquanto o fetch direto contra o mesmo equipamento (via SSH, sem passar
+pelo Cloudflare) levava **30 milissegundos**. Fila de thread, não rede nem
+câmera -- o `cf-cache-status: MISS` de cada requisição só piorava porque
+cada uma tinha que esperar uma thread livre ANTES de sequer começar a
+tentar a rede.
+
+**Corrigido**: `ThreadPoolExecutor(max_workers=32, thread_name_prefix=
+"device-web-proxy")` dedicado só para este proxy
+(`_device_proxy_executor` em `app/api/endpoints/maintenance.py`), usado via
+`loop.run_in_executor(...)` no lugar de `asyncio.to_thread`. Reteste ao
+vivo, mesma câmera, mesma página: `DOMContentLoaded` caiu de ~22-33s para
+**1.7s**, página completa (`load`) de mais de 36s para **3.77s**, pior
+recurso individual de 32s para **1.4s**.
+
+**Metodologia que valeu a pena registrar**: a primeira rodada de medição
+direta no servidor (fetch isolado, sem concorrência real) mostrava tudo
+rápido (30ms-1s) e não capturava o problema -- só apareceu testando com o
+Chrome real do usuário, carregando a página inteira de verdade (50-60
+requisições simultâneas), confirmando que "medir uma coisa de cada vez" e
+"medir uma rajada real" podem contar histórias completamente diferentes
+quando o gargalo é contenção de recurso compartilhado, não latência de
+rede. Scripts de teste ad-hoc ficaram em
+`C:\Users\elish\AppData\Local\Temp\claude\...\scratchpad\` (não
+commitados): `ler_aba_camera.py`, `fetch_isolado.py`, `fetch_headers.py`,
+`recarrega_e_mede.py` -- todos conectam via CDP na aba real já aberta pelo
+`navegador-chrome` (`scripts/chrome.py`), sem precisar reabrir nada.
+
+**Rede local instável de novo**: a queda do `10.10.12.7` mencionada na
+entrada anterior persistiu por esta sessão inteira -- todo o trabalho
+seguinte também foi feito pelo IP público `201.182.184.84`.
+
+Imagem final em produção (v2 e v3): `sightops-prod-api:20260906-webproxylat7`.
