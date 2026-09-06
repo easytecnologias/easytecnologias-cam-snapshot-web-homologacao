@@ -2488,3 +2488,35 @@ pedindo a senha nesse caso, exatamente como antes. Se algum dia quiser
 resolver esse caso também, precisa de um depósito de credencial próprio
 pro HOST do gravador (não pelo `camera_ip`), que ainda não existe.
 Imagem final em produção (v2 e v3): `sightops-prod-api:20260906-iapass1`.
+
+**Quarto complemento, mesma tarde -- este achado ao vivo, com o usuário
+testando de verdade**: janela de 30 min (RADS, `100.65.10.51`, DVR-01)
+travou a busca por **1067s (quase 18 min)**, terminando em "Conversão
+excedeu o tempo limite". Medido ao vivo: esse site tem link **~10x mais
+lento** que outro testado antes (**1.6 MB/s** vs 16-20 MB/s) -- só baixar
+o segmento de 460MB (30 min contínuos) levou quase 5 minutos, e converter
+30 min de vídeo pra IA estoura os 180s de timeout do ffmpeg.
+`NVR_AI_SEARCH_MAX_TOTAL_SEC` (o "orçamento" entre saltos) só é checado
+ENTRE câmeras, não interrompe um download/conversão já em andamento --
+por isso o total explodiu tão além do nominal.
+
+Usuário perguntou se dava pra usar a detecção de movimento/IA do próprio
+DVR pra baixar só os trechos relevantes em vez da janela inteira --
+**investigado e confirmado que o recurso existe no equipamento**
+(`mediaFileFind` aceita `condition.Flag[0]=Event`, e o firmware tem
+`SmartMotionDetect` com `ObjectTypes.Human=true`/`Vehicle=true`), mas está
+com `Enable=false` nessa câmera -- a gravação é contínua (`Flags=Timing`),
+sem segmento de evento pra filtrar. **Melhoria futura real**: se o cliente
+ligar detecção inteligente na câmera (mudança de configuração no
+equipamento, fora do escopo do SightOps), o código de busca pode passar a
+priorizar os trechos marcados em vez de baixar o contínuo inteiro -- ganho
+grande de velocidade quando disponível.
+
+**Corrigido pro caso de hoje**: `search_recordings`
+(`app/services/nvr_search_service.py`) rejeita de cara -- sem tentar
+baixar nada -- qualquer janela inicial maior que
+`NVR_AI_SEARCH_MAX_WINDOW_MIN` (10 min, `os.getenv`). Validado ao vivo
+contra o mesmo DVR/janela que travou: agora recusa em 0.00s. Frontend
+(`analysis.js`) replica a validação antes de enviar (evita ida e volta) e
+mostra o limite no formulário (`index.html`). Imagem final em produção
+(v2 e v3): `sightops-prod-api:20260906-window1`.
