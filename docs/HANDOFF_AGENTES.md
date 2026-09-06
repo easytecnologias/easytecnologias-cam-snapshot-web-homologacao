@@ -2331,3 +2331,77 @@ entrada anterior persistiu por esta sessão inteira -- todo o trabalho
 seguinte também foi feito pelo IP público `201.182.184.84`.
 
 Imagem final em produção (v2 e v3): `sightops-prod-api:20260906-webproxylat7`.
+
+## 2026-09-06 (tarde) — Agente de busca de gravação por IA: já existia, nunca tinha funcionado
+
+Usuário pediu um "agente inteligente" pra buscar gravação em linguagem
+natural ("busque um carro assim"). Achado central: **isso já existe em
+código** (`app/services/nvr_search_service.py` + `nvr_ai_service.py` +
+`gemini_video_search.py`, endpoints em `app/api/endpoints/ia.py`, tela
+"Reprodução / IA-NVR" em `frontend/js/analysis.js`) — pré-checa índice de
+gravação, baixa e transcodifica o trecho, manda pro Gemini (busca por
+descrição em linguagem natural, com timestamp e confiança), e se acha,
+encadeia automaticamente pras câmeras vizinhas do mesmo site (número
+sequencial no título). Nunca tinha funcionado de ponta a ponta em produção,
+por dois motivos reais, ambos corrigidos hoje:
+
+**1) `GEMINI_API_KEY` nunca foi configurada.** Usuário criou chave nova
+(Google AI Studio, projeto dedicado `sightops-recording-search`,
+`gen-lang-client-0503012658`, nível pago/pré-pagamento — importante pra
+não deixar vídeo de cliente real ser usado em treinamento do modelo, que é
+o que o nível gratuito permite). Configurada em `.env.production` e
+`.env.v3`. **Achado no caminho**: `gemini-2.5-flash` (modelo hardcoded em
+`gemini_video_search.py`) não existe mais pra chaves novas — a própria API
+recomendou `gemini-3.6-flash`, que é o que ficou configurado em
+`GEMINI_VIDEO_MODEL`. Validado com uma chamada de texto simples primeiro,
+depois com `search_clip_for_query` num clipe real (achou "carro branco
+passando ao fundo" com 95% de confiança).
+
+**2) O download de gravação Intelbras/Dahua (`loadfile.cgi`, usado por
+`download_dav`/`download_clip_mp4` em `recorder_media_service.py`) está
+quebrado em pelo menos um DVR real de produção** (`10.10.9.151`, cliente
+EASY-TECNOLOGIAS) -- devolve HTTP 400 ou corpo sem cabeçalho DAV válido,
+mesmo quando a gravação existe de verdade e o próprio índice do DVR
+(`mediaFileFind.cgi`) acha ela sem problema. Isso é a MESMA classe de bug
+já documentada numa sessão anterior pra outros DVRs Intelbras (ver memória
+`nvr-perucaba-154-download`), nunca corrigido no código de produção até
+hoje -- só existia como procedimento manual.
+
+**Corrigido**: `download_dav` agora cai automaticamente pra um fallback
+quando `loadfile.cgi` falha (`_rpc_loadfile_fallback` em
+`recorder_media_service.py`): busca o(s) arquivo(s) reais pelo índice
+(`dahua_media_find_segments`, antes `_dahua_media_find_segments` --
+tornada pública em `nvr_ai_service.py` pra ser reaproveitada), baixa cada
+um via `RPC_Loadfile` (download de arquivo inteiro, não playback), concatena
+se a janela cruzar mais de um arquivo, e corta com ffmpeg (`-c copy`, sem
+recodificar) pro intervalo exato pedido. O contrato de `download_dav`
+(arquivo de saída = exatamente `[start, end]`) se mantém igual pra quem
+chama (`playback.py` e `nvr_search_service.py`), então nenhum dos dois
+precisou mudar.
+
+**Validado ao vivo, ponta a ponta, no código real de produção**: o pipeline
+completo (`search_recordings`) contra o DVR quebrado, do zero (índice +
+download com fallback + IA), em **44,17s**, achando corretamente um carro
+escuro parado e um **carro branco passando ao fundo aos 116s**, confiança
+100%. Antes de hoje essa chamada falhava sempre no download, antes mesmo de
+chegar na IA.
+
+**O que ainda falta, mapeado mas não resolvido**: Hikvision não está
+integrado nesse pipeline (`query_recording_segments` devolve "ainda só
+implementado pra Intelbras/Dahua" pra qualquer outro fabricante). Testei
+`scripts/hikvision_recording_probe.py` (script solto, não integrado) contra
+um NVR Hikvision real de produção (`10.10.9.155`, DS-7632NXI-K2, firmware
+V4.84.100) e o `/ISAPI/ContentMgmt/search` recusa a
+busca com "two root tags" mesmo com o corpo XML objetivamente correto
+(conferido byte a byte via `r.request.body`) -- tentei variações (JSON,
+sem campos opcionais, `Connection: close`, sem `Expect: 100-continue`) sem
+sucesso. Precisa de mais investigação (possivelmente essa versão de
+firmware usa um schema ligeiramente diferente, ou precisa de outro
+endpoint) antes de estender o agente pra Hikvision.
+
+Credenciais reais de DVR/câmera desta sessão (site PERUCABA, cliente
+EASY-TECNOLOGIAS) foram confirmadas mas **não vão aqui** -- pedir ao usuário
+de novo se precisar (ele já forneceu antes: 3 senhas candidatas, cada
+equipamento aceitou uma delas).
+
+Imagem final em produção (v2 e v3): `sightops-prod-api:20260906-nvrfix1`.
