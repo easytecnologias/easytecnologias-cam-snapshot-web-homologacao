@@ -2405,3 +2405,41 @@ de novo se precisar (ele já forneceu antes: 3 senhas candidatas, cada
 equipamento aceitou uma delas).
 
 Imagem final em produção (v2 e v3): `sightops-prod-api:20260906-nvrfix1`.
+
+## 2026-09-06 (tarde) — Tela Gravadores: canais agrupados por DVR nomeável
+
+Usuário viu a tela "Gravadores" (RADS, site BARRA DE SAO MIGUEL) com 245
+canais numa tabela só, coluna "Título" cheia de serial de fábrica
+("7KOM0204255LX") em vez de nome -- "não sei qual é o DVR nem qual é a
+câmera". Achado: `_parse_titles` (`app/api/endpoints/nvr.py`) lê o título
+de canal direto do `ChannelTitle[N].Name` configurado NO PRÓPRIO DVR
+físico -- pra esse gravador em especial, ninguém nunca renomeou os canais
+no equipamento, então ficou o nome de fábrica. É dado real do DVR, não bug
+de leitura.
+
+**Frontend only, sem tocar em equipamento real**: tabela de Gravadores
+(`frontend/js/recorders.js`) agora agrupa por host (= um DVR físico) com
+cabeçalho colapsável mostrando um nome pro gravador, usando um campo que
+já existia no backend (`recorder_name`, editável via `/api/nvr/save` e
+`/api/dvr/save`) mas nunca tinha UI nenhuma. Sem nome definido, cai pra
+"DVR-01, DVR-02..." sequencial dentro do site. Lápis no cabeçalho renomeia
+-- grava só no SightOps (metadado, não escreve no DVR físico; diferente da
+ação "Renomear canal" já existente, que essa sim manda comando pro
+equipamento). Canal com título genérico (serial, "VIP-1230", "Câmera 3"
+etc. -- detector em `camHasDefaultTitle`, `frontend/js/cameras.js`, ganhou
+um padrão novo pra serial alfanumérico) mostra "Camera NN" em vez do lixo,
+só na exibição. Painel rápido do Dashboard (`dashboard.js`) usa o mesmo
+nome de DVR.
+
+**Achado no caminho, corrigido antes de publicar**: o padrão novo de
+serial (`/^[a-z0-9]{8,16}$/`) inicialmente pegava QUALQUER palavra de
+8-16 letras sem espaço -- "PORTARIA" (nome real, válido) caía como
+"genérico" por engano. Corrigido exigindo pelo menos 1 dígito no meio
+(serial de fábrica sempre mistura letra+número; nome de local sozinho,
+não).
+
+Validado ao vivo com CDP contra produção real (não só teste sintético):
+agrupamento renderizando (`DVR-01`, 32 câmeras, PERUCABA/EASY-TECNOLOGIAS),
+`camHasDefaultTitle` sem falso positivo, e o fluxo de renomear completo
+(salvar → ler de volta → apagar) testado contra o backend com um host
+sintético (`203.0.113.250`), sem deixar resíduo em produção.
