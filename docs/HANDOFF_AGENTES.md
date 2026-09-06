@@ -2192,3 +2192,81 @@ release v2 ficou preso no IP antigo (`connect() failed: Host is
 unreachable`) até um `docker restart sightops-prod-nginx` -- `nginx -s
 reload` sozinho não bastou dessa vez. O `sightops-v3-nginx` não teve esse
 problema no mesmo evento.
+
+## 2026-09-06 (madrugada) — Botão "Web" ainda lento: HTTP antes de HTTPS, sessão HTTP reaproveitada, cache de estáticos
+
+Continuação direta do fix de latência de 2026-09-05. Usuário testou de
+verdade e trouxe evidência concreta (print do DevTools/Rede do Chrome) de
+duas câmeras diferentes:
+
+**1) HTTP antes de HTTPS por padrão.** Usuário confirmou: "99% das câmeras
+não usam https até porque vem desativados [de fábrica]". A ordem antiga
+sondava https às cegas primeiro mesmo sabendo que ia falhar quase sempre.
+Invertido em `_tentar_schemes` (`app/services/device_web_proxy.py`): HTTP
+primeiro com o timeout normal (caso comum), HTTPS vira a exceção com o
+timeout curto (`_PROBE_CONNECT_TIMEOUT`), a não ser que aquele host
+específico já tenha provado que fala HTTPS de verdade (fica em
+`_scheme_cache` daquele host).
+
+**2) Sessão HTTP reaproveitada.** `fetch_device` chamava
+`requests.request()` (função de módulo, que abre e fecha uma `Session` nova
+a cada chamada -- sem keep-alive). Trocado por uma `requests.Session()`
+persistente por host (`_session_for`/`_sessions`), com `HTTPAdapter`
+(`pool_maxsize=20`, já que várias sub-requisições concorrentes do mesmo
+navegador batem na mesma Session vindas de threads diferentes via
+`asyncio.to_thread`). Efeito real medido: pequeno isolado (a latência de
+rede até o site domina, não o handshake) -- mas correto e sem custo.
+
+**3) Cache de arquivos estáticos da própria interface da câmera.** O
+achado que mais importou: medindo a página completa de uma câmera real
+(RADS, Intelbras VIPC-1230-D-G2, IP `100.65.8.16`, site "Ginásio Alto da
+Barra") direto pelo proxy, cada requisição individual levava ~0.8-1s
+(latência real do link até aquele site, não bug de código) e a página de
+login sozinha já carrega 31 arquivos (JS/CSS/ícone) -- a tela pós-login
+real (vista no DevTools do usuário) chega a ~60+, com uma dúzia de scripts
+de player de vídeo (`mp4remux.js`, `WebGLCanvas.js`, `WebsocketServer*.js`,
+`audioPlayer.js` etc.) em 404 porque essa firmware não tem esses arquivos
+(interface pensada pra IE+ActiveX, o Chrome moderno tenta e falha em cada
+alternativa). Multiplicado por dezenas de arquivos com só 6 conexões
+simultâneas por host (limite do Chrome), dá pra chegar nos "2 minutos"
+relatados -- isso é limite do link do site + da própria interface antiga
+da câmera, não do proxy.
+
+**Corrigido o que dava pra corrigir**: cache em memória (`_static_cache`
+em `app/api/endpoints/maintenance.py`, TTL de 1h) para arquivos com
+extensão de estático (`.js .css .png .jpg .jpeg .gif .ico .svg .woff
+.woff2 .ttf .eot`) -- não dependem de sessão/login e não mudam entre
+requisições. **Escopado por tenant** (`_static_cache_key` inclui
+`get_current_tenant_slug()`): faixas de IP privado/CGNAT se repetem entre
+clientes neste sistema, então sem isso um arquivo cacheado da câmera do
+tenant A vazaria pro tenant B que por coincidência usa o mesmo IP interno
+-- testado explicitamente (dois tenants sintéticos com o mesmo IP, prova
+de que o segundo tenant NÃO reusa o cache do primeiro). Só cacheia resposta
+200 (nunca erro -- um 404 de hoje pode virar 200 depois de um firmware
+update, cachear erro esconderia isso pra sempre dentro do TTL). Medido
+contra a câmera real: página de login + 31 recursos caiu de **5.46s
+(visita fria) para 2.04s (visita com cache quente, mesmo processo Python --
+processos separados nunca provariam nada de um cache em memória)**. O que
+sobra na visita quente são os dois 404 reais (não cacheáveis por design):
+`splayerCore/SPlayer.js` (arquivo que a firmware não tem) e
+`api/maintenance/web/<ip>/` (link quebrado, auto-referente, presente na
+própria página da câmera).
+
+**Incidente de deploy, desta vez evitado**: depois do incidente de
+2026-09-05 (onde `docker commit` de um container parado com `sleep 3600`
+gravou esse `sleep` como `CMD` da imagem nova), toda imagem candidata desta
+sessão foi gerada com `docker commit --change='CMD [...]'` explícito
+restaurando o `uvicorn` real, E validada subindo um container de verdade
+(sem override de comando nenhum) antes de qualquer deploy -- as 3 imagens
+publicadas nesta madrugada (`webproxylat3`, `webproxylat4`,
+`webproxylat5`) passaram por esse passo extra e nenhuma repetiu o
+problema.
+
+**Rede local caiu no meio do trabalho**: `10.10.12.7` parou de responder
+("Network error: Connection timed out") a partir da correção nº 3. Trocado
+para o IP público `201.182.184.84` (mesma senha, mesma fingerprint já
+conferida -- ver `[[sightops-acesso-alternativo-ip-publico]]`) sem
+interromper o trabalho; os dois releases continuaram saudáveis o tempo
+todo, a queda foi só do lado do acesso, não do servidor.
+
+Imagem final em produção (v2 e v3): `sightops-prod-api:20260906-webproxylat5`.
