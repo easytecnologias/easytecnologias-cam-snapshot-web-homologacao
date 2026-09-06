@@ -36,6 +36,17 @@ from app.services.device_web_proxy import (
 
 router = APIRouter(prefix="/api", tags=["maintenance"])
 
+# asyncio.to_thread usa o executor PADRAO do processo (min(32, cpu_count+4)
+# threads -- neste servidor, cpu_count=4, entao so 8 threads no total,
+# compartilhadas com QUALQUER outra rota do app que tambem use to_thread
+# (controle de acesso, ferramentas de OLT, etc). Uma unica pagina de camera
+# carrega 50+ sub-recursos de uma vez -- sozinha ja estoura esse pool, e
+# ainda briga com tudo mais rodando na mesma hora. Medido ao vivo: alguns
+# arquivos levando 27-32s numa pagina real, quando o fetch direto contra o
+# mesmo equipamento leva <200ms -- fila de threads, nao rede nem camera.
+# Executor dedicado, maior, so para o proxy de camera/DVR/NVR.
+_device_proxy_executor = ThreadPoolExecutor(max_workers=32, thread_name_prefix="device-web-proxy")
+
 
 def _netwatch_slug(site: str) -> str:
     s = str(site or "").strip().lower()
@@ -1272,6 +1283,14 @@ def _host_in_recorder_inventory(host: str) -> bool:
 # for atualizado, generoso o bastante pra valer a pena.
 _STATIC_CACHE_TTL_SECONDS = 3600
 _STATIC_CACHE_MAX_ENTRIES = 500
+# antes disto TODA resposta deste proxy saia com Cache-Control: no-store --
+# o Cloudflare via isso e fazia bypass total (cf-cache-status: BYPASS),
+# obrigando CADA sub-recurso a ir da borda ate a origem pelo tunel, mesmo
+# sendo um arquivo estatico identico a cada visita. Deixar so os estaticos
+# publicamente cacheaveis permite a borda do Cloudflare responder direto,
+# sem nem chegar aqui -- ganho medido bem maior que qualquer coisa do lado
+# do proxy. TTL curto o bastante pra nao incomodar update de firmware.
+_CDN_CACHE_MAX_AGE_SECONDS = 1800
 _STATIC_CACHE_EXTENSIONS = (
     ".js", ".css", ".png", ".jpg", ".jpeg", ".gif", ".ico", ".svg",
     ".woff", ".woff2", ".ttf", ".eot",
@@ -1335,7 +1354,11 @@ async def maintenance_camera_web_proxy(ip: str, request: Request, path: str = ""
             status_code, conteudo, media_type = do_cache
             return Response(
                 content=conteudo, status_code=status_code, media_type=media_type,
-                headers={"Cache-Control": "no-store", "X-Frame-Options": "SAMEORIGIN", "X-SightOps-Proxy-Cache": "hit"},
+                headers={
+                    "Cache-Control": f"public, max-age={_CDN_CACHE_MAX_AGE_SECONDS}",
+                    "X-Frame-Options": "SAMEORIGIN",
+                    "X-SightOps-Proxy-Cache": "hit",
+                },
             )
 
     headers: dict[str, str] = {
@@ -1374,10 +1397,13 @@ async def maintenance_camera_web_proxy(ip: str, request: Request, path: str = ""
         # ao clicar em Web: cada sub-recurso da pagina da camera (JS/CSS/
         # imagem) tinha que esperar o anterior terminar em vez de andar em
         # paralelo.
-        upstream = await asyncio.to_thread(
-            fetch_device,
-            ip, path, query, request.method, headers, body,
-            username=username, password=password, http_port=_device_http_port(ip),
+        loop = asyncio.get_running_loop()
+        upstream = await loop.run_in_executor(
+            _device_proxy_executor,
+            lambda: fetch_device(
+                ip, path, query, request.method, headers, body,
+                username=username, password=password, http_port=_device_http_port(ip),
+            ),
         )
     except DeviceUnreachable as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
@@ -1390,6 +1416,16 @@ async def maintenance_camera_web_proxy(ip: str, request: Request, path: str = ""
         "X-Frame-Options": "SAMEORIGIN",
         **filter_response_headers(upstream.headers),
     }
+    # decisao nossa, nao da camera: sobrescreve o que veio de
+    # filter_response_headers (que deixa passar um Cache-Control do proprio
+    # equipamento) -- so arquivo estatico com 200 e sem Set-Cookie vira
+    # publicamente cacheavel na borda do Cloudflare; qualquer outra coisa
+    # (html dinamico, RPC/cgi, erro) continua no-store, sem excecao.
+    resp_headers["Cache-Control"] = (
+        f"public, max-age={_CDN_CACHE_MAX_AGE_SECONDS}"
+        if (cacheavel and upstream.status_code == 200 and not upstream.headers.get("set-cookie"))
+        else "no-store"
+    )
     location = upstream.headers.get("location")
     if location:
         resp_headers["Location"] = _proxy_location_header(location, ip=ip)
