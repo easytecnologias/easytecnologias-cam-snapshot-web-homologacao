@@ -264,7 +264,7 @@ print("logout OK")
 O DVR só é alcançável via túnel até o servidor de produção. Rodar no Windows (fora do WSL, o WSL herda a rede do host via NAT e enxerga `127.0.0.1` do Windows):
 
 ```
-plink -ssh -batch -hostkey "SHA256:Mr+mCWial0YVe4kvWEYCq7A+pZt/F+5nMhBa5FHKSnw" -pw 'xzydsP2011' -L 15540:100.65.10.51:554 -L 15537:100.65.10.51:37777 central@201.182.184.84
+plink -ssh -batch -hostkey "SHA256:Mr+mCWial0YVe4kvWEYCq7A+pZt/F+5nMhBa5FHKSnw" -pw '<senha do servidor central, ver [[server_central_credentials]]>' -L 15540:100.65.10.51:554 -L 15537:100.65.10.51:37777 central@201.182.184.84
 ```
 
 (trocar o IP do DVR conforme o equipamento sendo testado; manter essa janela aberta em segundo plano durante o teste)
@@ -290,18 +290,21 @@ git commit -m "feat(netsdk): login/logout via ctypes contra o NetSDK nativo"
 
 ---
 
-### Task 4: Playback acelerado + captura de frames via callback
+### Task 4: Playback acelerado + captura de stream bruto via callback
+
+**Correção descoberta durante a execução (Task 2, lendo `demo/03.PlayBack/dialog.cpp` real):** o callback de dados do NetSDK (`fDownLoadDataCallBack`, assinatura real confirmada: `int CALLBACK DataCallBack(LLONG lRealHandle, DWORD dwDataType, BYTE *pBuffer, DWORD dwBufSize, LDWORD dwUser)`) entrega o **stream bruto codificado** (mesmo formato `.dav`/H.264/H.265 que o projeto já baixa via HTTP), não frames já decodificados em pixel — o demo oficial literalmente escreve esses bytes direto num arquivo `.dav`. Decodificar pixel a pixel é trabalho do PlaySDK (uma segunda biblioteca nativa separada) ou de qualquer decodificador de vídeo. Em vez de integrar o PlaySDK (escopo maior, mais uma biblioteca nativa pra bindar), a Task 4 canaliza os bytes recebidos pra um processo `ffmpeg` via pipe — o mesmo `ffmpeg` que o projeto inteiro já usa pra decodificar esse formato — e lê os frames decodificados da saída do `ffmpeg`.
 
 **Files:**
 - Modify: `scripts/netsdk_bridge.py`
 - Test: `scripts/netsdk_playback_speed_test.py`
 
 **Interfaces:**
-- Consome: `login()`/`logout()` (Task 3), trechos de `CLIENT_PlayBackByTime*`/callback (Task 2).
+- Consome: `login()`/`logout()` (Task 3), trechos de `CLIENT_PlayBackByTimeEx2`/callback (Task 2, já confirmados: struct `NET_IN_PLAY_BACK_BY_TIME_INFO` com campos `stStartTime`/`stStopTime` (`NET_TIME`), `hWnd`, `cbDownLoadPos`, `dwPosUser`, `fDownLoadDataCallBack`, `dwDataUser`, `nPlayDirection`, `nWaittime`; `NET_TIME` com campos `dwYear`/`dwMonth`/`dwDay`/`dwHour`/`dwMinute`/`dwSecond`).
 - Produz: em `netsdk_bridge.py`:
-  - `abrir_playback(lib, handle_login, canal: int, inicio: datetime, fim: datetime, on_frame: Callable[[bytes, int, int], None]) -> int` (retorna o handle de playback; `on_frame` recebe `(dados_do_frame, largura, altura)` a cada frame decodificado)
+  - `abrir_playback(lib, handle_login, canal: int, inicio: datetime, fim: datetime, on_bytes_brutos: Callable[[bytes], None]) -> int` (retorna o handle de playback; `on_bytes_brutos` recebe os bytes crus de cada chamada do callback `DataCallBack`, repassando pro pipe do ffmpeg)
   - `set_velocidade(lib, handle_playback: int, velocidade: int) -> None` (aceita -4 a 4, mapeando pro enum `EM_PLAY_BACK_SPEED`; valores fora disso levantam `ValueError`)
   - `fechar_playback(lib, handle_playback: int) -> None`
+  - `DecodificadorFFmpeg` (classe auxiliar): abre um `subprocess.Popen(["ffmpeg", "-i", "pipe:0", "-f", "rawvideo", "-pix_fmt", "bgr24", "-vf", "fps=2", "pipe:1"], stdin=PIPE, stdout=PIPE)`, expõe `escrever(dados_brutos: bytes)` (manda pro stdin) e `ler_frames_disponiveis() -> list[np.ndarray]` (lê o que já estiver pronto no stdout, sem bloquear, usando o tamanho fixo do frame BGR24 pra decidir quantos bytes formam um frame completo)
 
 - [ ] **Step 1: Implementar `abrir_playback()`**
 
@@ -541,7 +544,7 @@ git commit -m "feat(netsdk): pontuacao com YOLO em cima dos frames do playback a
 - [ ] **Step 1: Abrir o túnel SSH pro DVR da Easy Tecnologias (host `10.10.10.120`, portas 554 e 37777)**
 
 ```
-plink -ssh -batch -hostkey "SHA256:Mr+mCWial0YVe4kvWEYCq7A+pZt/F+5nMhBa5FHKSnw" -pw 'xzydsP2011' -L 15540:10.10.10.120:554 -L 15537:10.10.10.120:37777 central@201.182.184.84
+plink -ssh -batch -hostkey "SHA256:Mr+mCWial0YVe4kvWEYCq7A+pZt/F+5nMhBa5FHKSnw" -pw '<senha do servidor central, ver [[server_central_credentials]]>' -L 15540:10.10.10.120:554 -L 15537:10.10.10.120:37777 central@201.182.184.84
 ```
 
 - [ ] **Step 2: Rodar o scan contra o dia inteiro (03/09/2026), canal 4, em blocos de poucas horas por vez**

@@ -2520,3 +2520,71 @@ contra o mesmo DVR/janela que travou: agora recusa em 0.00s. Frontend
 (`analysis.js`) replica a validação antes de enviar (evita ida e volta) e
 mostra o limite no formulário (`index.html`). Imagem final em produção
 (v2 e v3): `sightops-prod-api:20260906-window1`.
+
+## 2026-09-07 — Investigação de busca "dia inteiro sem saber a hora"; PoC de NetSDK com reprodução acelerada
+
+Usuário trouxe o caso real: câmera fixa, roubo/furto já aconteceu, não sabe
+o dia nem a hora -- caso completamente diferente do que a tela IA-NVR
+resolve (janela curta, horário conhecido). Sessão inteira dedicada a achar
+uma arquitetura viável, testando ao vivo contra equipamento real de dois
+clientes (RADS e Easy Tecnologias/PERUCABA).
+
+**Caminhos testados e descartados como base geral:**
+- Baixar tudo em blocos + processar localmente: ~23GB/dia por câmera,
+  usuário rejeitou explicitamente por custo de armazenamento ("não é
+  solução comercial boa").
+- Detecção nativa do DVR (`SmartMotionDetect`, testado em canal real):
+  limitado a **4 de 32 canais** no Intelbras iNVD 5132 (RADS,
+  `100.65.10.51`) e a **1 de 32 canais** no NVD 7132 (PERUCABA
+  `10.10.9.120:8086` e Easy Tecnologias `10.10.10.120:8081`) -- confirmado
+  ser limite de HARDWARE do produto (ficha técnica oficial da Intelbras),
+  não config nem firmware desatualizado. `MotionDetect` clássico (sem
+  limite de canal) está ligado nos 32 canais mas NÃO gera `Flag=Event` no
+  `mediaFileFind` quando a gravação é contínua -- testado ao vivo, 9
+  segmentos de 4h, todos `Timing`.
+- API JSON nova (`/cgi-bin/api/SmdDataFinder`, `/cgi-bin/api/analyseTaskManager`
+  -- essa última permite mandar o PRÓPRIO DVR analisar um arquivo já
+  gravado, achado real na doc oficial `HTTP_API_V3_59_Intelbras.pdf`):
+  devolve erro genérico em AMBOS os NVRs testados, firmwares diferentes
+  (2025-03 e 2025-06) -- pertence a uma geração de hardware que o parque
+  atual não tem.
+- RTSP `cam/playback?channel=N&starttime=...&endtime=...` (documentado,
+  funciona, ~7s pra ver qualquer instante): só toca em tempo real
+  (`speed≈1.02x` medido baixando 10 min) -- inviável sozinho pra um dia
+  inteiro.
+
+**Incidente real desta sessão**: rodei 24 processos de `ffmpeg` fazendo
+captura RTSP concorrente DENTRO do container `sightops-prod-api` (o
+mesmo que serve produção pra todos os clientes) -- derrubou a
+performance do servidor (load average 89, memória batendo em swap) por
+alguns minutos até eu matar os processos manualmente (`pkill` nem existe
+nesse container, tive que matar via `/proc` na mão). Corrigido, e a partir
+daí todo teste de captura/processamento passou a rodar isolado (WSL
+Ubuntu na máquina do usuário), nunca em produção.
+
+**Achado que desbloqueou o caminho**: o NetSDK nativo Dahua/Intelbras
+(`General_NetSDK_3.050_PlaySDK_3.042.zip`, obtido pelo usuário direto com
+o suporte oficial da Intelbras) tem `CLIENT_SetPlayBackSpeed` com
+velocidade até **16x** tempo real (`EM_PLAY_BACK_SPEED_FAST_16`) -- é o
+mecanismo que os apps oficiais (ISIC Lite, SIM Next) usam pra reprodução
+acelerada, e que a API HTTP simples não expõe. Confirmado lendo o código-
+fonte REAL do demo oficial (`demo/03.PlayBack/dialog.cpp`, dentro do
+próprio pacote do SDK), não só a declaração no header -- inclusive um
+achado importante: o callback de dados (`fDownLoadDataCallBack`) entrega o
+stream BRUTO codificado (mesmo formato que já baixamos via HTTP), não
+pixel decodificado; decodificar é responsabilidade de quem recebe (plano
+usa `ffmpeg` via pipe, não integra o PlaySDK separado).
+
+WSL Ubuntu instalado na máquina do usuário (precisou reiniciar 2x --
+primeira tentativa de `wsl --install` falhou por instabilidade de rede
+durante o download; corrigido habilitando os componentes do Windows
+[`Microsoft-Windows-Subsystem-Linux`, `VirtualMachinePlatform`] via DISM
+primeiro, separado do download do kernel/distro).
+
+Design formal em `docs/superpowers/specs/2026-09-07-netsdk-busca-acelerada-design.md`,
+plano de implementação em `docs/superpowers/plans/2026-09-07-netsdk-busca-acelerada.md`,
+assinaturas reais extraídas em `docs/superpowers/plans/netsdk-header-excerpts.md`.
+Critério de sucesso combinado com o usuário: rodar a busca contra um caso
+real conhecido mas não revelado (acidente de carro, canal 4, DVR da Easy
+Tecnologias, dia 03/09/2026, horário escondido de propósito) e ver se
+aparece entre os achados de maior pontuação -- ainda em andamento.
