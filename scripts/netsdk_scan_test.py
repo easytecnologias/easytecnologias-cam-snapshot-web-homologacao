@@ -31,7 +31,7 @@ host = os.environ["NETSDK_HOST"]
 porta = int(os.environ.get("NETSDK_PORT", "37777"))
 usuario = os.environ["NETSDK_USER"]
 senha = os.environ["NETSDK_PASS"]
-canal = int(os.environ.get("NETSDK_CHANNEL", "1"))
+canal = int(os.environ.get("NETSDK_CHANNEL", "1")) - 1  # env var e 1-based (como o usuario ve no DVR); NetSDK e 0-based
 inicio = datetime.strptime(os.environ["NETSDK_START"], "%Y-%m-%d %H:%M:%S")
 fim = datetime.strptime(os.environ["NETSDK_END"], "%Y-%m-%d %H:%M:%S")
 

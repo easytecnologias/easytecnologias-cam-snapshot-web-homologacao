@@ -153,6 +153,11 @@ def abrir_playback(
     fim: datetime,
     on_bytes_brutos: Callable[[bytes], None],
 ) -> int:
+    """`canal` e indice 0-based (canal "4" que o usuario ve no DVR = canal=3
+    aqui). Confirmado ao vivo: o mesmo offset que ja existia na API HTTP
+    (a resposta do mediaFileFind tambem devolve o Channel 0-based, embora
+    o parametro de busca condition.Channel seja 1-based -- inconsistencia
+    do proprio fabricante, nao nossa. NetSDK e 0-based dos dois lados."""
     lib.CLIENT_PlayBackByTimeEx2.restype = LLONG
     lib.CLIENT_PlayBackByTimeEx2.argtypes = [
         LLONG, ctypes.c_int,
