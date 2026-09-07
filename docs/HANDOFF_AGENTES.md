@@ -2588,3 +2588,232 @@ Critério de sucesso combinado com o usuário: rodar a busca contra um caso
 real conhecido mas não revelado (acidente de carro, canal 4, DVR da Easy
 Tecnologias, dia 03/09/2026, horário escondido de propósito) e ver se
 aparece entre os achados de maior pontuação -- ainda em andamento.
+
+## 2026-09-07 (continuação, mesmo dia) — Handoff completo da PoC NetSDK: o que funciona, o que está quebrado, como retomar
+
+Esta seção existe pra um agente novo (contexto zerado) retomar exatamente
+de onde parou, sem precisar re-descobrir nada do que já foi validado ao
+vivo. Ela complementa (não substitui) o design
+(`docs/superpowers/specs/2026-09-07-netsdk-busca-acelerada-design.md`), o
+plano (`docs/superpowers/plans/2026-09-07-netsdk-busca-acelerada.md`) e o
+resumo de assinaturas (`docs/superpowers/plans/netsdk-header-excerpts.md`).
+
+### O objetivo concreto desta investigação
+
+O usuário quer achar, numa gravação real, um acidente de carro (bateu
+num poste de ferro de iluminação) que ele já presenciou/sabe que
+aconteceu, mas escondeu de propósito o horário exato -- é um teste cego
+de verdade, não um exercício teórico. Local: canal 4 do DVR da Easy
+Tecnologias (`10.10.10.120`), dia **03/09/2026**. O usuário deu uma pista
+no meio do caminho: o horário provável é **por volta das 13h**.
+
+### Ambiente já preparado (não precisa reinstalar nada disso)
+
+- **WSL Ubuntu** instalado e funcional na máquina Windows do usuário
+  (`wsl -d Ubuntu`). Precisou: habilitar `Microsoft-Windows-Subsystem-Linux`
+  e `VirtualMachinePlatform` via DISM (`dism /online /enable-feature
+  /featurename:<nome> /all /norestart`) ANTES do `wsl --install` funcionar
+  -- a primeira tentativa direta falhou por instabilidade de rede baixando
+  o kernel. Depois de habilitar os componentes e reiniciar, `wsl --install
+  -d Ubuntu` funcionou.
+- **`/tmp` dentro do WSL NÃO é persistente** -- a VM do WSL2 reinicia
+  sozinha por inatividade entre chamadas e limpa `/tmp`. Qualquer coisa
+  que precise sobreviver entre comandos vai em `~` (home, disco real),
+  nunca em `/tmp`.
+- **Rede WSL2 é NAT separada da do Windows**: dentro do WSL, `127.0.0.1`
+  NÃO aponta pro host Windows. O IP do host visto de dentro do WSL é o
+  gateway default (`ip route show default`, no ambiente testado deu
+  `172.21.16.1` -- pode mudar a cada boot do WSL, sempre reconferir).
+- **NetSDK Linux** já extraído dentro do WSL em `~/netsdk/lib/` (`.so`) e
+  `~/netsdk/include/` (headers) -- vem de
+  `C:\Users\elish\OneDrive\Área de Trabalho\API Intelbras\General_NetSDK_3.050_PlaySDK_3.042.zip`
+  → `NetSDK 3.050/Linux/General_NetSDK_Eng_Linux64_IS_V3.050.0000005.4.R.190306.tar.gz`.
+  Também tem `demo/03.PlayBack/dialog.cpp` (código-fonte real de exemplo,
+  muito mais confiável que só ler o header pra achar a assinatura/uso
+  correto de cada função).
+- **Python do WSL**: `ffmpeg`, `ultralytics` (YOLO), `torch` (CPU-only) e
+  `opencv-python-headless` já instalados globalmente (`pip install
+  --break-system-packages`). **Pegadinha real**: instalar `ultralytics`
+  direto puxa o PyTorch com CUDA (554MB) do PyPI, que falha
+  consistentemente com "Connection reset by peer" nessa rede. Solução que
+  funcionou: instalar `torch`/`torchvision` primeiro via
+  `--index-url https://download.pytorch.org/whl/cpu` (mais leve, ~196MB,
+  baixa de um CDN diferente que não tem esse problema), depois
+  `pip install --no-deps ultralytics ultralytics-thop` (evita o resolver
+  de dependência tentar puxar o torch de novo), depois
+  `opencv-python-headless` separado.
+- **Túnel SSH** (necessário pra alcançar qualquer DVR, tanto pela porta
+  RTSP 554 quanto pela porta de controle nativo do NetSDK): tem que
+  escutar em `0.0.0.0`, não só `127.0.0.1`/`localhost` -- senão o WSL não
+  alcança (mesmo problema de rede NAT do item acima). Exemplo real usado:
+  ```
+  plink -ssh -batch -hostkey "SHA256:Mr+mCWial0YVe4kvWEYCq7A+pZt/F+5nMhBa5FHKSnw" \
+    -pw '<senha, ver [[server_central_credentials]]>' -N \
+    -L 0.0.0.0:15540:<IP_DVR>:554 -L 0.0.0.0:15537:<IP_DVR>:<PORTA_CONTROLE> \
+    central@201.182.184.84
+  ```
+- **A porta de controle nativo do NetSDK NÃO é universal.** No RADS
+  (`100.65.10.51`, Intelbras iNVD 5132) é a `37777` padrão. No DVR da Easy
+  Tecnologias (`10.10.10.120`, NVD 7132) a `37777` está FECHADA -- a porta
+  real é **`30000`** (achada varrendo portas comuns a partir de HTTP
+  externo). Sempre confirmar com um scan de porta antes de assumir 37777.
+
+### Código já escrito e funcionando (`scripts/`)
+
+- **`scripts/netsdk_bridge.py`**: bindings `ctypes` pro NetSDK. Funções
+  confirmadas funcionando ao vivo: `carregar_biblioteca()`,
+  `inicializar()`, `login()`/`logout()` (via `CLIENT_LoginEx2`, com
+  `CLIENT_SetConnectTime(10000, 2)` antes -- sem isso o login dava
+  timeout mesmo com a rede boa), `abrir_playback()`/`fechar_playback()`
+  (via `CLIENT_PlayBackByTimeEx2`), `set_velocidade()` (via
+  `CLIENT_SetPlayBackSpeed`, aceita -4 a 4 mapeando pro enum
+  `EM_PLAY_BACK_SPEED`). Também tem `abrir_playback_leve()` (via
+  `CLIENT_MultiPlayBack`, pede resolução/bitrate baixo tipo CIF/512kbps)
+  mas **essa função NÃO aceita `CLIENT_SetPlayBackSpeed`** no handle que
+  ela retorna -- `CLIENT_SetPlayBackSpeed(handle_do_multiplayback, ...)`
+  falha. Não achamos ainda a forma certa de acelerar esse tipo de sessão
+  (pode ser um código de controle diferente via `CLIENT_PlayBackControl`,
+  não investigado a fundo).
+- **IMPORTANTE -- canal é 0-based no NetSDK**: o parâmetro `canal` de
+  `abrir_playback`/`abrir_playback_leve` é **índice 0-based** (canal "4"
+  que o usuário vê no DVR = `canal=3` na chamada). Confirmado ao vivo:
+  pedir `canal=4` direto (querendo dizer "canal 4") retornava
+  `CLIENT_PlayBackByTimeEx2 falhou` (handle 0), e a API HTTP
+  (`mediaFileFind`) confirmou que existe gravação nesse canal/horário --
+  ou seja, não é "sem gravação", é índice errado. Os scripts de teste
+  (`netsdk_scan_test.py`, `netsdk_playback_speed_test.py`) já fazem essa
+  conversão automaticamente: a variável de ambiente `NETSDK_CHANNEL` é
+  1-based (como o usuário vê), e o script subtrai 1 antes de chamar a
+  bridge.
+- **O callback de dados do NetSDK entrega STREAM BRUTO, não pixel
+  decodificado.** `fDownLoadDataCallBack` (assinatura `int
+  CALLBACK(LLONG, DWORD, BYTE*, DWORD, LDWORD)`) entrega bytes H.264/H.265
+  crus (mesmo formato `.dav` que a API HTTP já baixa) -- confirmado lendo
+  o código real do demo, que literalmente escreve esses bytes num arquivo
+  `.dav`. **`scripts/netsdk_scan_test.py`** resolve isso canalizando os
+  bytes recebidos pra um processo `ffmpeg` via pipe (`stdin`), que
+  decodifica e reescala pra 640x360 fixo (`-vf fps=2,scale=640:360 -f
+  rawvideo -pix_fmt bgr24`), lendo os frames prontos do `stdout` do
+  ffmpeg numa thread Python separada, e rodando YOLO (`yolo11n.pt`, já
+  cacheado depois da primeira execução) em cada frame.
+- **`scripts/netsdk_bridge_login_test.py`**, **`netsdk_playback_speed_test.py`**,
+  **`netsdk_scan_test.py`**, **`netsdk_leve_speed_test.py`**: scripts de teste
+  manual (não pytest, rodar na mão), todos usando as mesmas variáveis de
+  ambiente: `NETSDK_HOST`, `NETSDK_PORT`, `NETSDK_USER`, `NETSDK_PASS`,
+  `NETSDK_CHANNEL` (1-based), `NETSDK_START`/`NETSDK_END` (formato
+  `"YYYY-MM-DD HH:MM:SS"`).
+
+### Validado ao vivo, funcionando de verdade
+
+- Login (RADS e Easy Tecnologias, DVRs diferentes, portas de controle
+  diferentes -- 37777 e 30000 respectivamente).
+- Playback acelerado real: pedido `FAST_16` (16x nominal), velocidade
+  REAL medida variou entre **~3,2x e ~6,7x** dependendo do momento/site --
+  não chega em 16x porque **o throughput real é limitado pelo link de
+  internet do site, não pelo SDK**. Prova concreta: no RADS, a taxa de
+  bytes recebida em modo acelerado (~1,4 MB/s) bateu quase exato com o
+  link real do site já medido antes nesta mesma sessão (1,6 MB/s, via
+  download HTTP comum). Na Easy Tecnologias, comparação direta: bitrate
+  real (1x, medido via RTSP comum) ≈ 451 KB/s; taxa recebida em modo
+  acelerado ≈ 2906 KB/s; razão ≈ 6,4x -- bate com o 6,7x medido.
+  Testado também: latência de rede (tanto direto do servidor até o DVR
+  quanto pelo túnel) está ótima (~1-9ms) -- não é isso que limita a
+  velocidade, é banda mesmo.
+- Pipeline completo (NetSDK 16x + ffmpeg pipe + YOLO) validado com
+  detecções REAIS e consistentes (não ruído): sequências de frames
+  consecutivos com a mesma classe/confiança parecida (carro passando,
+  pessoa andando), em pelo menos 3 canais/horários diferentes.
+- Múltiplas sessões RTSP simultâneas (3) no mesmo canal: sem problema.
+
+### Três problemas REAIS, não resolvidos, específicos do DVR da Easy Tecnologias
+
+**Nenhum destes acontece no RADS -- só apareceram testando contra a Easy Tecnologias.**
+
+1. **Sessões NetSDK concorrentes causam `Segmentation fault`.** Rodando
+   uma varredura do dia inteiro em blocos de 1h com `CONCURRENCY=4`
+   (4 processos Python simultâneos, cada um com seu próprio login/sessão),
+   vários blocos morreram com "Segmentation fault" (crash nativo da
+   `.so`, não exceção Python capturável). Isso significa que vários
+   resultados "0 achados" da varredura completa podem ser CRASH, não
+   ausência real de atividade -- não confiar nesses números sem
+   reprocessar isolado. Não investigado a fundo (não sabemos se é
+   thread-safety da biblioteca, limite de conexões simultâneas do lado do
+   DVR, ou outra coisa). Concorrência 3 (RTSP puro, sem NetSDK) funcionou
+   bem antes -- o problema parece ser específico de várias sessões NetSDK
+   (`CLIENT_LoginEx2`/`CLIENT_PlayBackByTimeEx2`) ao mesmo tempo.
+
+2. **Pedir playback começando EXATAMENTE no segundo de início de um
+   segmento de gravação trava a sessão cedo.** Pedido de
+   `13:00:00`-`14:00:00` (a gravação real desse canal começa às
+   `13:00:01`, confirmado via `mediaFileFind` HTTP) resultou, em 3
+   tentativas diferentes (2 concorrentes com outra varredura, 1
+   totalmente isolada), em receber só uns 9 segundos de dado real (~125-149
+   frames de ~7200 esperados) antes do fluxo de bytes parar -- sintoma:
+   YOLO fica reportando a MESMA confiança exata pra dezenas de frames
+   seguidos, sinal de que o `ffmpeg` está repetindo o último frame
+   decodificado porque parou de receber dado novo (não é "sem gravação",
+   os bytes brutos realmente pararam de chegar). **Pedir um horário de
+   início alguns segundos DEPOIS do início exato do segmento (ex.:
+   `13:15:00`, bem no meio de um segmento) funcionou perfeitamente** --
+   2720 frames processados numa janela de 30 min, cobertura de ~75%,
+   achados reais e distribuídos. Hipótese não confirmada: pedir o início
+   exato (ou 1s antes) do arquivo de gravação confunde a lógica interna
+   do NetSDK de localizar o arquivo certo. Não testado ainda: se pedir
+   `13:00:05` (5s depois do início real) já resolve, ou se o problema é
+   mais amplo que isso.
+
+3. **Download via HTTP (`RPC_Loadfile`, através de
+   `app.services.recorder_media_service._rpc_loadfile_fallback` ou do
+   wrapper público `download_clip_mp4`) falha com
+   `IncompleteRead(0 bytes read, N more expected)` -- IMEDIATO, nas 3
+   janelas de 10 min testadas (13:15-13:25, 13:25-13:35, 13:35-13:45).**
+   Esse é o MESMO mecanismo que funcionou perfeitamente a noite toda
+   contra o RADS (baixou 480MB sem problema). Contra a Easy Tecnologias,
+   falha 100% das vezes, imediatamente, com o Content-Length batendo
+   certo com o tamanho do arquivo mas ZERO bytes de corpo entregues --
+   sugere firewall/proxy/NAT entre o servidor de produção e o DVR
+   derrubando a conexão em respostas HTTP grandes, ou o próprio DVR
+   recusando esse tipo de requisição especificamente (talvez relacionado
+   ao mesmo tipo de bloqueio que fechou a porta 37777 nesse equipamento --
+   vale a hipótese de que esse cliente/rede tem alguma política mais
+   restritiva que o RADS). Isso bloqueou a tentativa de usar o Gemini
+   (`app.services.gemini_video_search.search_clip_for_query`) pra analisar
+   os trechos candidatos com linguagem natural ("um carro batendo contra
+   um poste de ferro de iluminação") -- o Gemini em si nunca chegou a ser
+   testado porque o download prévio do clipe falhou sempre.
+
+### Estado da busca do acidente em si (o objetivo original)
+
+- **Coberto** (via NetSDK+YOLO, com achados reais catalogados):
+  06h, 07h, 09h, 10h, 11h, 12h, 13h15-13h45 (não a hora 13h inteira, por
+  causa do problema #2 acima), 14h, 15h, 16h, 17h, 19h.
+- **Sem gravação real** (confirmado, não é crash): 00h-03h.
+- **"0 achados" mas SUSPEITO de ser crash, não confirmado**: 04h, 05h,
+  08h, 18h, 20h-23h -- precisa reprocessar isolado (sem concorrência)
+  antes de confiar nesse resultado.
+- **Não coberto ainda**: 13h00-13h15 e 13h45-14h00 (as bordas da hora que
+  o usuário apontou como mais provável).
+- Dois candidatos visuais checados manualmente (sequências longas de
+  detecção de "carro" em 13:23 e 13:31, que poderiam ser um veículo
+  parado/batido) foram **confirmados como falso alarme** -- capturei
+  frame real de cada instante via RTSP e são só rua vazia com uma moto
+  estacionada no canteiro (provavelmente a moto sendo confundida
+  repetidamente com "carro" pelo YOLO, gerando a sequência longa).
+- **O acidente ainda não foi encontrado.**
+
+### Sugestão de próximos passos (não é obrigação, é só o que parece mais promissor)
+
+1. Investigar o problema #3 (download HTTP falhando) primeiro -- sem
+   isso, não dá pra usar Gemini nem confirmar visualmente candidatos
+   maiores que um frame avulso. Testar: baixar um arquivo bem menor/mais
+   curto pra ver se o problema é tamanho, ou se é 100% desse DVR
+   independente de tamanho; testar via `curl`/`requests` cru (fora da
+   função existente) pra isolar se é bug do nosso código ou do
+   equipamento/rede.
+2. Terminar de cobrir 13h00-13h15 e 13h45-14h00 (começando alguns
+   segundos depois da borda do segmento, não exatamente em cima).
+3. Reprocessar isolado (concorrência 1) as horas marcadas como
+   suspeitas de crash (04,05,08,18,20-23) antes de descartá-las.
+4. Se nada aparecer cobrindo o dia inteiro no canal 4, considerar que o
+   acidente pode ter sido capturado por OUTRO canal (o usuário só
+   confirmou "canal 4", mas vale perguntar de novo se há certeza).
