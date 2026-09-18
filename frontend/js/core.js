@@ -40,8 +40,12 @@ async function openDeviceWeb(ip, port) {
       const res = await fetch(`${SIGHTOPS_AGENT_URL}/open?${q}`);
       openData = await res.json();
       if (openData && openData.ok && openData.url) {
-        const w = window.open(openData.url, '_blank', 'noopener');
-        if (!w) { diagErr = 'popup bloqueado'; } else { return; }
+        // window.open com 'noopener' devolve null POR ESPECIFICACAO -- nao da
+        // pra usar o retorno pra detectar popup bloqueado. Checar isso abria a
+        // aba do agente E a do proxy (duas saidas). Se o agente deu a url, a
+        // janela e dele: abre e encerra aqui.
+        window.open(openData.url, '_blank', 'noopener');
+        return;
       } else if (openData) { diagErr = 'open:' + (openData.error || 'sem url'); }
     } catch (e) { diagErr = 'open:' + ((e && e.message) || String(e)); }
   }
