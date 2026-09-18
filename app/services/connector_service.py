@@ -890,7 +890,10 @@ def _routeros_job_script_template(base_url: str, connector_id: str, token: str, 
         endpoint_port = endpoint_port or str(tunnel.get("listen_port") or 51820)
         client_address = _text(tunnel.get("client_address") or f"{DEFAULT_WG_NETWORK_PREFIX}.2/32")
         routeros_address = _wireguard_routeros_address(client_address)
-        server_allowed = f"{DEFAULT_WG_NETWORK_PREFIX}.0/24"
+        # inclui o bloco de transito isolado (10.201.0.0/16): p/ conectores com
+        # tabela dedicada o servidor fala de 10.201.0.x, entao o cliente precisa
+        # aceitar/rotear essa origem de volta (senao a resposta some).
+        server_allowed = f"{DEFAULT_WG_NETWORK_PREFIX}.0/24,10.201.0.0/16"
         return f""":local result "wireguard_install:started";
 :do {{/interface wireguard print count-only}} on-error={{:set result "wireguard_install:failed,RouterOS 7 required"; /tool fetch url="{base_url}/api/connectors/agent/routeros/jobs/{job_id}/result-text" http-method=post http-header-field="x-sightops-connector-id:{connector_id},x-sightops-connector-token:{token},Content-Type:text/plain" http-data=$result dst-path=sightops-job-result.json; :put "ERRO SightOps: WireGuard nao disponivel. Atualize o MikroTik para RouterOS 7."; :error "routeros-7-required";}};
 :do {{/interface wireguard peers remove [/interface wireguard peers find interface="sightops-wg"];}} on-error={{}};
@@ -904,6 +907,7 @@ def _routeros_job_script_template(base_url: str, connector_id: str, token: str, 
 /interface wireguard add name="sightops-wg" private-key="{_text(tunnel.get("client_private_key"))}" listen-port=13231 mtu=1420;
 /ip address add address="{routeros_address}" interface="sightops-wg" comment="SightOps WG";
 /interface wireguard peers add interface="sightops-wg" public-key="{_text(tunnel.get("server_public_key"))}" endpoint-address="{endpoint_host}" endpoint-port={endpoint_port} allowed-address="{server_allowed}" persistent-keepalive=25s comment="SightOps WG server";
+/ip route add dst-address=10.201.0.0/16 gateway="sightops-wg" comment="SightOps WG";
 /ip firewall filter add chain=input in-interface="sightops-wg" action=accept comment="SightOps WG input";
 /ip firewall filter add chain=output out-interface="sightops-wg" action=accept comment="SightOps WG output";
 /ip firewall filter add chain=forward in-interface="sightops-wg" action=accept comment="SightOps WG entrada";
@@ -1116,7 +1120,8 @@ def build_routeros_wireguard_script(connector_id: str) -> str:
     endpoint_port = endpoint_port or str(tunnel.get("listen_port") or 51820)
     client_address = _text(tunnel.get("client_address") or f"{DEFAULT_WG_NETWORK_PREFIX}.2/32")
     routeros_address = _wireguard_routeros_address(client_address)
-    server_allowed = f"{DEFAULT_WG_NETWORK_PREFIX}.0/24"
+    # inclui o bloco de transito isolado (10.201.0.0/16) -- ver nota no template do job.
+    server_allowed = f"{DEFAULT_WG_NETWORK_PREFIX}.0/24,10.201.0.0/16"
     return f"""# SightOps WireGuard - RouterOS
 # Cole no terminal do MikroTik do cliente. Requer RouterOS 7.
 
@@ -1134,6 +1139,7 @@ def build_routeros_wireguard_script(connector_id: str) -> str:
 /interface wireguard add name="sightops-wg" private-key="{_text(tunnel.get("client_private_key"))}" listen-port=13231 mtu=1420;
 /ip address add address="{routeros_address}" interface="sightops-wg" comment="SightOps WG";
 /interface wireguard peers add interface="sightops-wg" public-key="{_text(tunnel.get("server_public_key"))}" endpoint-address="{endpoint_host}" endpoint-port={endpoint_port} allowed-address="{server_allowed}" persistent-keepalive=25s comment="SightOps WG server";
+/ip route add dst-address=10.201.0.0/16 gateway="sightops-wg" comment="SightOps WG";
 /ip firewall filter add chain=input in-interface="sightops-wg" action=accept comment="SightOps WG input";
 /ip firewall filter add chain=output out-interface="sightops-wg" action=accept comment="SightOps WG output";
 /ip firewall filter add chain=forward in-interface="sightops-wg" action=accept comment="SightOps WG entrada";
