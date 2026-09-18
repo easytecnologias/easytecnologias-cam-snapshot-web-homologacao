@@ -35,6 +35,7 @@ def main() -> None:
             # --- primeiro cadastro
             aluno = save_person({
                 "full_name": "JOAO SILVA",
+                "document_id": "11111111111",
                 "enrollment_code": "2026-0042",
                 "class_name": "5A",
                 "guardian_phone": "82999990000",
@@ -44,6 +45,7 @@ def main() -> None:
             # --- mesma matricula de novo: atualiza, nao duplica
             atualizado = save_person({
                 "full_name": "JOAO SILVA DE SOUZA",   # nome corrigido pela secretaria
+                "document_id": "11111111111",          # mesmo CPF: e a mesma pessoa
                 "enrollment_code": "2026-0042",
                 "class_name": "5B",                    # mudou de turma
                 "guardian_phone": "82988887777",
@@ -57,11 +59,16 @@ def main() -> None:
             assert pessoas[0]["class_name"] == "5B", pessoas[0]
 
             # --- matricula de outra pessoa e recusada
-            outro = save_person({"full_name": "MARIA SANTOS", "enrollment_code": "2026-0099"})
+            outro = save_person({
+                "full_name": "MARIA SANTOS",
+                "document_id": "22222222222",
+                "enrollment_code": "2026-0099",
+            })
             try:
                 save_person({
                     "id": outro["id"],
                     "full_name": "MARIA SANTOS",
+                    "document_id": "22222222222",     # mesmo CPF da propria Maria
                     "enrollment_code": "2026-0042",   # matricula do Joao
                 })
                 raise AssertionError("deveria ter recusado a matricula de outra pessoa")
@@ -71,18 +78,19 @@ def main() -> None:
             # A exigencia de matricula fica no endpoint do cadastro (a tela), nao
             # aqui -- importacao e rotinas internas gravam sem passar por ela.
 
-            # --- visitante segue sem exigencia, e nao colide entre si
-            a = save_person({"full_name": "VISITANTE UM", "person_type": "visitor"})
-            b = save_person({"full_name": "VISITANTE DOIS", "person_type": "visitor"})
+            # --- visitante segue sem exigencia de matricula, mas CPF e obrigatorio
+            # igual todo mundo
+            a = save_person({"full_name": "VISITANTE UM", "document_id": "33333333333", "person_type": "visitor"})
+            b = save_person({"full_name": "VISITANTE DOIS", "document_id": "44444444444", "person_type": "visitor"})
             assert a["id"] != b["id"]
 
             # --- o ID da controladora vem da matricula, sem ninguem digitar
             assert atualizado["controller_user_id"] == "2026-0042".replace("-", "") or                    atualizado["controller_user_id"], atualizado
-            novo = save_person({"full_name": "PEDRO NUMERICO", "enrollment_code": "4321"})
+            novo = save_person({"full_name": "PEDRO NUMERICO", "document_id": "55555555555", "enrollment_code": "4321"})
             assert novo["controller_user_id"] == "4321", novo
 
             # --- matricula nao numerica cai no proximo numero livre, nunca sorteado
-            letras = save_person({"full_name": "SOFIA LETRAS", "enrollment_code": "TURMA-A-07"})
+            letras = save_person({"full_name": "SOFIA LETRAS", "document_id": "66666666666", "enrollment_code": "TURMA-A-07"})
             assert letras["controller_user_id"].isdigit(), letras
             assert letras["controller_user_id"] != "4321", letras
 

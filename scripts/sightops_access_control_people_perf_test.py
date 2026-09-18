@@ -26,7 +26,12 @@ def main() -> None:
         try:
             ensure_access_control_schema()
             people = [
-                save_person({"full_name": f"Aluno {idx:03d}", "site": "ESCOLA", "active": True})
+                save_person({
+                    "full_name": f"Aluno {idx:03d}",
+                    "document_id": f"{idx + 1:011d}",
+                    "site": "ESCOLA",
+                    "active": True,
+                })
                 for idx in range(3)
             ]
             device = save_device(

@@ -13,8 +13,22 @@ import requests
 from app.core.crypto import decrypt, encrypt
 from app.core.tenant_context import get_current_tenant_slug
 from app.services import db_store
+from app.services.access_control_whatsapp_log import log_outbound_message
 
 logger = logging.getLogger("cam-snapshot")
+
+
+def _log_whatsapp_send(
+    numero: Any, body: str, status: str, *,
+    wa_message_id: str = "", template_name: str = "", error: str = "",
+) -> None:
+    """Registra a tentativa de envio pra tela Messenger -- nunca deixa uma
+    falha de log derrubar o envio de verdade em si."""
+    try:
+        log_outbound_message(numero, body, status=status, wa_message_id=wa_message_id,
+                              template_name=template_name, error=error)
+    except Exception:
+        logger.exception("Falha ao registrar mensagem de WhatsApp no historico")
 
 
 def _text(value: Any, limit: int = 500) -> str:
@@ -366,11 +380,16 @@ def _send_whatsapp_cloud(cfg: Dict[str, Any], event: Dict[str, Any], message: st
         timeout=25,
     )
     payload = _resposta_json(response)
+    wamid = ((payload.get("messages") or [{}])[0] or {}).get("id") or ""
     if 200 <= int(response.status_code or 0) < 300:
         estado = ((payload.get("messages") or [{}])[0] or {}).get("message_status") or "accepted"
         if estado in {"accepted", "sent", "delivered", "read"}:
+            _log_whatsapp_send(numero, message, "whatsapp_sent", wa_message_id=wamid,
+                                template_name=dados["template_name"])
             return "whatsapp_sent"
         logger.warning("Cloud API devolveu estado inesperado: %s", estado)
+        _log_whatsapp_send(numero, message, "whatsapp_failed", wa_message_id=wamid,
+                            template_name=dados["template_name"], error=f"estado inesperado: {estado}")
         return "whatsapp_failed"
     erro = payload.get("error") or {}
     logger.warning(
@@ -379,6 +398,8 @@ def _send_whatsapp_cloud(cfg: Dict[str, Any], event: Dict[str, Any], message: st
         erro.get("message") or response.text[:200],
         erro.get("code"),
     )
+    _log_whatsapp_send(numero, message, "whatsapp_failed", template_name=dados["template_name"],
+                        error=str(erro.get("message") or response.text[:200]))
     return "whatsapp_failed"
 
 
@@ -476,12 +497,15 @@ def _send_whatsapp_evolution(cfg: Dict[str, Any], event: Dict[str, Any], message
         timeout=20,
     )
     if 200 <= int(response.status_code or 0) < 300:
+        _log_whatsapp_send(numero, message, "whatsapp_sent")
         return "whatsapp_sent"
     logger.warning(
         "Evolution recusou a mensagem (HTTP %s): %s",
         response.status_code,
         getattr(response, "text", "")[:200],
     )
+    _log_whatsapp_send(numero, message, "whatsapp_failed",
+                        error=f"HTTP {response.status_code}: {getattr(response, 'text', '')[:200]}")
     return "whatsapp_failed"
 
 

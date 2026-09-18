@@ -68,6 +68,7 @@ def main() -> None:
             person = save_person(
                 {
                     "full_name": "Aluno Notificado",
+                    "document_id": "11111111111",
                     "person_type": "student",
                     "class_name": "7A",
                     "site": "ESCOLA",

@@ -17,7 +17,7 @@ from app.services.access_control_store import (
 def test_person_has_site_column() -> None:
     token = set_current_tenant_slug("cliente-a")
     try:
-        person = save_person({"full_name": "Joao Teste", "site": "Sede"})
+        person = save_person({"full_name": "Joao Teste", "document_id": "11111111111", "site": "Sede"})
         assert person["site"] == "Sede"
     finally:
         reset_current_tenant_slug(token)
@@ -49,7 +49,7 @@ def test_group_and_rule_crud() -> None:
 
     token = set_current_tenant_slug("cliente-b")
     try:
-        person = save_person({"full_name": "Maria Teste", "site": "Sede"})
+        person = save_person({"full_name": "Maria Teste", "document_id": "22222222222", "site": "Sede"})
         group = save_group({"name": "Alunos Manha", "site": "Sede"})
         set_group_members(group["id"], [person["id"]])
         assert list_group_members(group["id"]) == [person["id"]]

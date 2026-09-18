@@ -5,9 +5,13 @@ planilha e lida, conferida e so entao gravada, com pre-visualizacao obrigatoria:
 o usuario ve quantos serao criados, quantos atualizados e quais linhas foram
 recusadas, antes de qualquer escrita.
 
-A matricula e a chave: linha com matricula que ja existe ATUALIZA a pessoa em vez
-de criar outra. Isso torna a importacao repetivel -- a escola pode mandar a lista
-corrigida quantas vezes quiser sem duplicar ninguem.
+Matricula e CPF sao as duas chaves: linha que bate com uma pessoa ja
+cadastrada (por matricula OU por CPF) ATUALIZA em vez de criar outra. CPF e
+obrigatorio e nunca pode se repetir -- sem ele nao daria pra perceber que
+"matricula trocou de ano" e "aluno diferente" sao coisas diferentes. Se a
+matricula aponta pra uma pessoa e o CPF pra outra, a linha e recusada em vez
+de adivinhar qual esta certo. Isso torna a importacao repetivel -- a escola
+pode mandar a lista corrigida quantas vezes quiser sem duplicar ninguem.
 
 O que a planilha NAO traz e a foto. Importar cria o cadastro e o telefone do
 responsavel, mas o rosto continua vindo da controladora ou de upload individual.
@@ -33,7 +37,7 @@ COLUNAS: Dict[str, Tuple[str, ...]] = {
                            "usuario controladora", "id do equipamento"),
 }
 
-OBRIGATORIAS = {"enrollment_code": "matricula", "full_name": "nome"}
+OBRIGATORIAS = {"enrollment_code": "matricula", "full_name": "nome", "document_id": "cpf"}
 
 
 def _norm(valor: Any) -> str:
@@ -67,6 +71,12 @@ def _telefone(valor: Any) -> str:
     if len(digitos) in (10, 11):
         return "55" + digitos
     return ""
+
+
+def _cpf(valor: Any) -> str:
+    """So digitos -- vazio ou com tamanho diferente de 11 vira linha recusada
+    (ver chamada em analisar_planilha), nunca gravado torto."""
+    return re.sub(r"\D", "", _texto(valor))
 
 
 def _mapear_colunas(cabecalho: List[Any]) -> Dict[str, int]:
@@ -128,16 +138,25 @@ def analisar_planilha(conteudo: bytes, *, site: str = "", nome_arquivo: str = ""
             % (", ".join(faltando), vistas)
         )
 
-    existentes: Dict[str, Any] = {}
+    # Duas chaves de identidade, nao so a matricula -- foi so por causa disso
+    # que a mesma aluna virou dois cadastros em producao (matricula trocou de
+    # um ano pro outro, CPF continuou igual, e nada cruzava os dois pra
+    # perceber que era a mesma pessoa).
+    existentes_por_matricula: Dict[str, Any] = {}
+    existentes_por_cpf: Dict[str, Any] = {}
     for pessoa in (list_people() or []):
         matricula = _texto(pessoa.get("enrollment_code"))
         if matricula:
-            existentes[matricula] = pessoa
+            existentes_por_matricula[matricula] = pessoa
+        cpf = _cpf(pessoa.get("document_id"))
+        if cpf:
+            existentes_por_cpf[cpf] = pessoa
 
     criar: List[Dict[str, Any]] = []
     atualizar: List[Dict[str, Any]] = []
     recusados: List[Dict[str, Any]] = []
     vistas_no_arquivo: Dict[str, int] = {}
+    cpfs_no_arquivo: Dict[str, int] = {}
 
     for numero, linha in enumerate(linhas[1:], start=2):
 
@@ -156,7 +175,32 @@ def analisar_planilha(conteudo: bytes, *, site: str = "", nome_arquivo: str = ""
                               "motivo": "matricula repetida na planilha (linha %d)"
                                         % vistas_no_arquivo[matricula]})
             continue
+
+        cpf = _cpf(campo("document_id"))
+        if len(cpf) != 11:
+            recusados.append({"linha": numero, "matricula": matricula, "nome": nome,
+                              "motivo": "CPF obrigatorio e precisa ter 11 digitos"})
+            continue
+        if cpf in cpfs_no_arquivo:
+            recusados.append({"linha": numero, "matricula": matricula, "nome": nome,
+                              "motivo": "CPF repetido na planilha (linha %d)"
+                                        % cpfs_no_arquivo[cpf]})
+            continue
+
+        pessoa_por_matricula = existentes_por_matricula.get(matricula)
+        pessoa_por_cpf = existentes_por_cpf.get(cpf)
+        if (
+            pessoa_por_matricula
+            and pessoa_por_cpf
+            and pessoa_por_matricula["id"] != pessoa_por_cpf["id"]
+        ):
+            recusados.append({"linha": numero, "matricula": matricula, "nome": nome,
+                              "motivo": "matricula %s e CPF %s pertencem a pessoas diferentes"
+                                        " ja cadastradas" % (matricula, cpf)})
+            continue
+
         vistas_no_arquivo[matricula] = numero
+        cpfs_no_arquivo[cpf] = numero
 
         telefone_bruto = campo("guardian_phone")
         telefone = _telefone(telefone_bruto)
@@ -172,13 +216,14 @@ def analisar_planilha(conteudo: bytes, *, site: str = "", nome_arquivo: str = ""
             "guardian_phone": telefone,
             "guardian_name": campo("guardian_name"),
             "class_name": campo("class_name"),
-            "document_id": campo("document_id"),
+            "document_id": cpf,
             "controller_user_id": re.sub(r"\D", "", campo("controller_user_id")),
             "site": site,
             "sem_telefone": not telefone,
         }
-        if matricula in existentes:
-            registro["id_existente"] = existentes[matricula]["id"]
+        pessoa_existente = pessoa_por_matricula or pessoa_por_cpf
+        if pessoa_existente:
+            registro["id_existente"] = pessoa_existente["id"]
             atualizar.append(registro)
         else:
             criar.append(registro)

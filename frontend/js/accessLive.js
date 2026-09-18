@@ -9,6 +9,10 @@ let _accessLiveMetaLoaded = false;
 let _accessLiveEventSource = null;
 let _accessLiveStreamKey = '';
 let _accessLiveStreamRetryTimer = null;
+let _accessLiveEvents = [];
+let _accessLivePeople = [];
+let _accessLivePresent = [];
+let _accessLiveDrawerKind = '';
 
 const ACCESS_LIVE_REFRESH_MS = 6000;
 
@@ -90,7 +94,7 @@ function accessLiveInitials(name) {
 function accessLiveBuildQuery() {
   const query = new URLSearchParams();
   query.set('period', 'today');
-  query.set('limit', '120');
+  query.set('limit', '1000');
   const site = document.getElementById('accessLiveSite')?.value || '';
   const doorGroupId = document.getElementById('accessLiveDoorGroup')?.value || '';
   const deviceId = document.getElementById('accessLiveDevice')?.value || '';
@@ -402,8 +406,12 @@ function renderAccessLiveFeed(events) {
   }).join('');
 }
 
-function renderAccessLiveInside(people) {
-  const inside = people.filter(item => item.latest?.event_type === 'entrada');
+function accessLivePresentMeta(item) {
+  return [item.enrollment || item.document || '', item.site || ''].filter(Boolean).join(' - ') || 'Sem site';
+}
+
+function renderAccessLiveInside() {
+  const inside = _accessLivePresent || [];
   const list = document.getElementById('accessLiveInsideList');
   setText('accessLiveInsideCount', `${inside.length} pessoa${inside.length === 1 ? '' : 's'}`);
   if (!list) return;
@@ -416,9 +424,9 @@ function renderAccessLiveInside(people) {
       <div class="access-live-avatar">${esc(accessLiveInitials(item.name))}</div>
       <div>
         <strong>${esc(item.name)}</strong>
-        <span>${esc(item.meta || item.site || 'Sem site')}</span>
+        <span>${esc(accessLivePresentMeta(item))}</span>
       </div>
-      <b>${esc(accessLiveTimeAgo(item.lastEntry || item.firstEntry))}</b>
+      <b>${esc(accessLiveTimeAgo(item.since))}</b>
     </article>
   `).join('');
 }
@@ -446,6 +454,8 @@ function renderAccessLiveAttention(items) {
 function renderAccessLive(summary, events) {
   const report = summary || {};
   const people = accessLivePeopleFromEvents(events);
+  _accessLiveEvents = events || [];
+  _accessLivePeople = people;
   const attention = accessLiveAttentionItems(events, people);
   const notificationFailures = events.filter(event => {
     const status = String(event.notification_status || '').toLowerCase();
@@ -458,14 +468,143 @@ function renderAccessLive(summary, events) {
   }).length;
   setText('accessLiveEntries', report.entries || 0);
   setText('accessLiveExits', Number(report.exits || 0) + Number(report.manual_exits || 0));
-  setText('accessLiveInside', report.inside_now ?? people.filter(item => item.latest?.event_type === 'entrada').length);
+  setText('accessLiveInside', (_accessLivePresent && _accessLivePresent.length) || report.inside_now || 0);
   setText('accessLiveAttention', Number(report.without_person || 0) + notificationFailures + longPresent);
   setText('accessLiveState', events.length ? 'ao vivo' : 'sem eventos');
   renderAccessLiveLast(events[0] || null);
   renderAccessLiveFeed(events);
-  renderAccessLiveInside(people);
+  renderAccessLiveInside();
   renderAccessLiveAttention(attention);
   lucide.createIcons();
+  if (_accessLiveDrawerKind && !document.getElementById('accessLiveDrawer')?.classList.contains('hidden')) {
+    openAccessLiveDrawer(_accessLiveDrawerKind);
+  }
+}
+
+// --- Drawer lateral: lista de quem entrou / saiu / esta presente / a conferir ---
+const ACCESS_LIVE_DRAWER_TITLES = {
+  entries: 'Entradas hoje',
+  exits: 'Saidas hoje',
+  inside: 'Presentes agora',
+  attention: 'A conferir',
+};
+
+const ACCESS_LIVE_DRAWER_ROW = 'display:flex;align-items:center;gap:12px;padding:10px 4px;border-bottom:1px solid var(--border)';
+const ACCESS_LIVE_DRAWER_NAME = 'display:block;font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
+const ACCESS_LIVE_DRAWER_SUB = 'display:block;font-size:11px;color:var(--muted,#7a8794);white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
+
+function accessLiveDrawerAvatar(personId, name) {
+  const photo = personId
+    ? `<img src="${API_BASE}/api/access-control/people/${encodeURIComponent(personId)}/face-photo" alt="" loading="lazy" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover" onerror="this.remove()">`
+    : '';
+  return `<div style="position:relative;overflow:hidden;flex:0 0 46px;width:46px;height:46px;border-radius:10px;background:rgba(128,140,150,.16);display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:600;color:var(--muted,#7a8794)">${photo}<span>${esc(accessLiveInitials(name))}</span></div>`;
+}
+
+function accessLiveDrawerEventRow(event) {
+  const name = accessLivePersonName(event);
+  const local = [event.site || '', event.device_name || event.device_id || ''].filter(Boolean).join(' - ') || 'Sem local';
+  return `
+    <article style="${ACCESS_LIVE_DRAWER_ROW}">
+      ${accessLiveDrawerAvatar(event.person_id, name)}
+      <div style="flex:1;min-width:0">
+        <strong style="${ACCESS_LIVE_DRAWER_NAME}">${esc(name)}</strong>
+        <span style="${ACCESS_LIVE_DRAWER_SUB}">${esc(local)}</span>
+      </div>
+      <div style="display:flex;flex-direction:column;align-items:flex-end;gap:3px;flex-shrink:0">
+        ${accessLiveEventBadge(event.event_type)}
+        <b style="font-size:11px;color:var(--muted,#7a8794);font-weight:600;white-space:nowrap">${esc(accessLiveDateShort(event.occurred_at))}</b>
+      </div>
+    </article>`;
+}
+
+function accessLiveDrawerPresentRow(item) {
+  return `
+    <article style="${ACCESS_LIVE_DRAWER_ROW}">
+      ${accessLiveDrawerAvatar(item.person_id, item.name)}
+      <div style="flex:1;min-width:0">
+        <strong style="${ACCESS_LIVE_DRAWER_NAME}">${esc(item.name)}</strong>
+        <span style="${ACCESS_LIVE_DRAWER_SUB}">${esc(accessLivePresentMeta(item))}</span>
+      </div>
+      <b style="font-size:11px;color:var(--muted,#7a8794);font-weight:600;flex-shrink:0;white-space:nowrap">${esc(accessLiveTimeAgo(item.since))}</b>
+    </article>`;
+}
+
+function accessLiveDrawerAttentionItems() {
+  const events = _accessLiveEvents || [];
+  const people = _accessLivePeople || [];
+  const items = [];
+  events.filter(event => !String(event.person_id || '').trim()).forEach(event => {
+    items.push({ kind: 'Sem cadastro', title: accessLivePersonName(event), meta: `${event.site || 'Sem site'} - ${accessLiveDateShort(event.occurred_at)}`, icon: 'user-x' });
+  });
+  events.filter(event => {
+    const status = String(event.notification_status || '').toLowerCase();
+    return status.includes('fail') || status.includes('erro') || status.includes('error');
+  }).forEach(event => {
+    items.push({ kind: 'Notificacao', title: accessLivePersonName(event), meta: event.notification_status || 'falha no envio', icon: 'message-circle' });
+  });
+  people.filter(item => {
+    if (item.latest?.event_type !== 'entrada') return false;
+    const date = accessLiveDate(item.lastEntry || item.firstEntry);
+    return date && (Date.now() - date.getTime()) > 6 * 60 * 60 * 1000;
+  }).forEach(item => {
+    items.push({ kind: 'Permanencia', title: item.name, meta: `${item.site || 'Sem site'} - ${accessLiveTimeAgo(item.lastEntry || item.firstEntry)}`, icon: 'clock' });
+  });
+  return items;
+}
+
+function openAccessLiveDrawer(kind) {
+  const drawer = document.getElementById('accessLiveDrawer');
+  const overlay = document.getElementById('accessLiveDrawerOverlay');
+  const body = document.getElementById('accessLiveDrawerBody');
+  if (!drawer || !body) return;
+  _accessLiveDrawerKind = kind;
+  const events = _accessLiveEvents || [];
+  const people = _accessLivePeople || [];
+  let rowsHtml = '';
+  let count = 0;
+  let emptyMsg = 'Nada no filtro atual.';
+  if (kind === 'entries') {
+    const rows = events.filter(e => String(e.event_type || '').toLowerCase() === 'entrada');
+    count = rows.length; emptyMsg = 'Sem entradas no filtro atual.';
+    rowsHtml = rows.map(accessLiveDrawerEventRow).join('');
+  } else if (kind === 'exits') {
+    const rows = events.filter(e => ['saida', 'saida_manual'].includes(String(e.event_type || '').toLowerCase()));
+    count = rows.length; emptyMsg = 'Sem saidas no filtro atual.';
+    rowsHtml = rows.map(accessLiveDrawerEventRow).join('');
+  } else if (kind === 'inside') {
+    const rows = _accessLivePresent || [];
+    count = rows.length; emptyMsg = 'Sem pessoas presentes no filtro atual.';
+    rowsHtml = rows.map(accessLiveDrawerPresentRow).join('');
+  } else if (kind === 'attention') {
+    const items = accessLiveDrawerAttentionItems();
+    count = items.length; emptyMsg = 'Nenhuma pendencia no momento.';
+    rowsHtml = items.map(item => `
+      <article style="display:flex;align-items:flex-start;gap:12px;padding:10px 4px;border-bottom:1px solid var(--border)">
+        <div style="flex:0 0 34px;width:34px;height:34px;border-radius:9px;background:rgba(128,140,150,.16);display:flex;align-items:center;justify-content:center;color:var(--muted,#7a8794)"><i data-lucide="${esc(item.icon)}" style="width:16px;height:16px"></i></div>
+        <div style="flex:1;min-width:0">
+          <span style="display:block;font-size:10px;text-transform:uppercase;letter-spacing:.4px;color:var(--muted,#7a8794)">${esc(item.kind)}</span>
+          <strong style="display:block;font-size:13px;font-weight:600">${esc(item.title)}</strong>
+          <small style="display:block;font-size:11px;color:var(--muted,#7a8794)">${esc(item.meta)}</small>
+        </div>
+      </article>`).join('');
+  }
+  setText('accessLiveDrawerTitle', `${ACCESS_LIVE_DRAWER_TITLES[kind] || 'Detalhe'} (${count})`);
+  setText('accessLiveDrawerScope', accessLiveScopeLabel());
+  body.innerHTML = `<div style="padding:6px 20px 20px">${rowsHtml || `<div style="padding:32px 20px;text-align:center;color:var(--muted,#7a8794);font-size:13px">${esc(emptyMsg)}</div>`}</div>`;
+  drawer.classList.remove('hidden');
+  overlay?.classList.remove('hidden');
+  requestAnimationFrame(() => drawer.classList.add('open'));
+  if (window.lucide) lucide.createIcons();
+}
+
+function closeAccessLiveDrawer() {
+  _accessLiveDrawerKind = '';
+  const drawer = document.getElementById('accessLiveDrawer');
+  if (drawer) {
+    drawer.classList.remove('open');
+    drawer.classList.add('hidden');
+  }
+  document.getElementById('accessLiveDrawerOverlay')?.classList.add('hidden');
 }
 
 async function populateAccessLiveSites(force = false) {
@@ -497,10 +636,12 @@ async function loadAccessLive(force = false) {
     await populateAccessLiveSites(force);
     await populateAccessLiveMeta(force);
     const query = accessLiveBuildQuery();
-    const [summaryRes, eventsRes] = await Promise.all([
+    const [summaryRes, eventsRes, presentRes] = await Promise.all([
       apiJson(`/api/access-control/reports/summary?${query.toString()}`, { forceRefresh: true, cacheTtl: 0 }),
       apiJson(`/api/access-control/reports/events?${query.toString()}`, { forceRefresh: true, cacheTtl: 0 }),
+      apiJson(`/api/access-control/reports/present?${query.toString()}`, { forceRefresh: true, cacheTtl: 0 }).catch(() => null),
     ]);
+    _accessLivePresent = Array.isArray(presentRes?.people) ? presentRes.people : [];
     renderAccessLive(summaryRes?.summary || {}, eventsRes?.events || []);
     renderAccessLiveScope();
     _accessLiveLastLoadedAt = Date.now();
@@ -523,6 +664,18 @@ function bindAccessLive() {
   if (_accessLiveBindingDone) return;
   _accessLiveBindingDone = true;
   document.getElementById('btnAccessLiveRefresh')?.addEventListener('click', () => loadAccessLive(true));
+  document.querySelectorAll('.access-live-kpis [data-access-card]').forEach(card => {
+    card.style.cursor = 'pointer';
+    card.setAttribute('role', 'button');
+    card.setAttribute('tabindex', '0');
+    card.addEventListener('click', () => openAccessLiveDrawer(card.getAttribute('data-access-card')));
+    card.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); openAccessLiveDrawer(card.getAttribute('data-access-card')); }
+    });
+  });
+  document.getElementById('accessLiveDrawerClose')?.addEventListener('click', closeAccessLiveDrawer);
+  document.getElementById('accessLiveDrawerOverlay')?.addEventListener('click', closeAccessLiveDrawer);
+  document.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') closeAccessLiveDrawer(); });
   document.getElementById('accessLiveSite')?.addEventListener('change', () => {
     populateAccessLiveDoorGroups();
     populateAccessLiveDevices();

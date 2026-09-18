@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Dict, List
 
 from app.core.crypto import decrypt, encrypt
@@ -16,6 +16,12 @@ def _clean_text(value: Any, limit: int = 255) -> str:
 def _clean_phone(value: Any) -> str:
     raw = str(value or "").strip()
     return re.sub(r"[^\d+]", "", raw)[:32]
+
+
+def _clean_cpf(value: Any) -> str:
+    """So digitos -- bate com o que formatDocument() no frontend espera pra
+    aplicar a mascara 999.999.999-99 na exibicao."""
+    return re.sub(r"\D", "", str(value or ""))[:11]
 
 
 def _bool_int(value: Any, default: bool = True) -> int:
@@ -160,6 +166,13 @@ def ensure_access_control_schema() -> None:
             CREATE UNIQUE INDEX IF NOT EXISTS idx_access_people_tenant_enrollment
               ON access_people(tenant_slug, enrollment_code)
               WHERE enrollment_code <> '';
+            -- CPF virou obrigatorio e unico em 2026-09-04 (save_person ja
+            -- recusa gravar sem CPF ou com CPF de outra pessoa). Registro
+            -- antigo sem CPF continua existindo -- WHERE document_id <> ''
+            -- deixa esses de fora do indice, so trava duplicata nova.
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_access_people_tenant_document
+              ON access_people(tenant_slug, document_id)
+              WHERE document_id <> '';
 
             CREATE TABLE IF NOT EXISTS access_devices (
               id TEXT PRIMARY KEY,
@@ -389,13 +402,23 @@ def save_person(payload: Dict[str, Any]) -> Dict[str, Any]:
     if not full_name:
         raise ValueError("Informe o nome da pessoa.")
     person_type = _clean_text(payload.get("person_type") or "student", 32).lower() or "student"
-    document_id = _clean_text(payload.get("document_id"), 64)
     enrollment_code = _clean_text(payload.get("enrollment_code"), 64)
 
+    # CPF e obrigatorio e nunca pode se repetir: e o unico identificador que
+    # nao muda se a escola trocar a matricula do aluno de um ano pro outro
+    # (foi exatamente essa troca que duplicou uma aluna em producao antes
+    # desta checagem existir -- mesma pessoa, duas matriculas, sem CPF pra
+    # flagrar que era a mesma gente).
+    document_id = _clean_cpf(payload.get("document_id"))
+    if not document_id:
+        raise ValueError("Informe o CPF da pessoa.")
+    if len(document_id) != 11:
+        raise ValueError(f"CPF invalido: precisa ter 11 digitos ({document_id!r}).")
 
     # A matricula identifica o aluno para a escola. Sem casar por ela, gravar o
     # mesmo aluno de novo criaria outro UUID e outra pessoa -- que e o que
     # acontecia antes. Assim, reimportar a lista atualiza em vez de duplicar.
+    existente_por_matricula = None
     if enrollment_code:
         with db_store._conn() as conn:
             achado = conn.execute(
@@ -403,14 +426,40 @@ def save_person(payload: Dict[str, Any]) -> Dict[str, Any]:
                 (tenant, enrollment_code),
             ).fetchone()
         if achado:
-            existente = dict(achado)["id"]
-            if person_id and person_id != existente:
+            existente_por_matricula = dict(achado)["id"]
+            if person_id and person_id != existente_por_matricula:
                 raise ValueError(
                     f"A matricula {enrollment_code} ja pertence a outra pessoa neste cliente."
                 )
-            person_id = existente
 
-    person_id = person_id or uuid.uuid4().hex
+    # CPF e a segunda chave de identidade, agora obrigatoria em toda pessoa --
+    # casa por ele tambem pra pegar o caso "matricula trocou, pessoa e a
+    # mesma" em vez de criar duplicata.
+    existente_por_cpf = None
+    with db_store._conn() as conn:
+        achado_cpf = conn.execute(
+            "SELECT id FROM access_people WHERE tenant_slug=? AND document_id=?",
+            (tenant, document_id),
+        ).fetchone()
+    if achado_cpf:
+        existente_por_cpf = dict(achado_cpf)["id"]
+        if person_id and person_id != existente_por_cpf:
+            raise ValueError(f"O CPF {document_id} ja pertence a outra pessoa neste cliente.")
+
+    # Matricula e CPF apontando pra pessoas EXISTENTES diferentes = dado
+    # inconsistente (planilha com erro de digitacao, por exemplo). Nao
+    # adivinha qual esta certo -- recusa e deixa o humano corrigir.
+    if (
+        existente_por_matricula
+        and existente_por_cpf
+        and existente_por_matricula != existente_por_cpf
+    ):
+        raise ValueError(
+            f"A matricula {enrollment_code} e o CPF {document_id} "
+            "pertencem a pessoas diferentes neste cliente."
+        )
+
+    person_id = person_id or existente_por_matricula or existente_por_cpf or uuid.uuid4().hex
     class_name = _clean_text(payload.get("class_name"), 80)
     site = _clean_text(payload.get("site"), 120)
     controller_user_id = re.sub(r"\D", "", str(payload.get("controller_user_id") or ""))[:32]
@@ -1020,6 +1069,40 @@ def record_event(event: Dict[str, Any]) -> str:
             ).fetchone()
         if existing:
             return str(existing["id"])
+        # Debounce (janela de 5 min): a leitora facial re-reconhece a mesma
+        # pessoa a cada ~3s enquanto ela fica parada na frente -> dezenas de
+        # eventos identicos (e dezenas de WhatsApp). Tratamos como a MESMA
+        # passagem qualquer marcacao da mesma pessoa + mesmo tipo + mesmo device
+        # dentro de 5 min: nao insere de novo nem notifica. Saida manual/operador
+        # (source manual) passa direto -- e uma acao deliberada.
+        source_norm = _clean_text(event.get("source") or "device", 20)
+        person_id_norm = _clean_text(event.get("person_id"), 80)
+        if source_norm != "manual" and occurred_at:
+            window_start = ""
+            try:
+                _base_dt = datetime.strptime(occurred_at[:19], "%Y-%m-%d %H:%M:%S")
+                window_start = (_base_dt - timedelta(seconds=300)).strftime("%Y-%m-%d %H:%M:%S")
+            except Exception:
+                window_start = ""
+            if window_start:
+                recent = c.execute(
+                    """
+                    SELECT id FROM access_events
+                    WHERE tenant_slug = ? AND device_id = ? AND event_type = ?
+                      AND occurred_at >= ? AND occurred_at <= ?
+                      AND (
+                        (? <> '' AND person_id = ?)
+                        OR (? = '' AND person_name_raw = ?)
+                      )
+                    ORDER BY occurred_at DESC LIMIT 1
+                    """,
+                    (
+                        tenant, device_id, event_type, window_start, occurred_at,
+                        person_id_norm, person_id_norm, person_id_norm, person_name_raw,
+                    ),
+                ).fetchone()
+                if recent:
+                    return str(recent["id"])
         event_id = uuid.uuid4().hex
         c.execute(
             """
@@ -1287,6 +1370,67 @@ def access_presence_summary(site: str = "", device_id: str = "", door_group_id: 
     inside = sum(1 for event_type in latest.values() if event_type == "entrada")
     outside = sum(1 for event_type in latest.values() if event_type in {"saida", "saida_manual"})
     return {"people_with_events": len(latest), "inside_now": inside, "outside_now": outside}
+
+
+def access_present_people(site: str = "", device_id: str = "", door_group_id: str = "") -> List[Dict[str, Any]]:
+    """Lista as pessoas PRESENTES agora (mesma regra do inside_now: a ultima
+    marcacao de cada pessoa e uma entrada). Devolve nome/site/horario da entrada
+    para a lista lateral do Acesso ao Vivo -- sem isso o front derivava a lista
+    dos eventos carregados (limitados) e nunca batia com o numero do card."""
+    ensure_access_control_schema()
+    tenant = db_store._current_tenant_slug()
+    where = ["e.tenant_slug = ?", "e.person_id <> ''"]
+    params: list[Any] = [tenant]
+    clean_site = _clean_text(site, 120)
+    clean_device_id = _clean_text(device_id, 80)
+    clean_door_group_id = _clean_text(door_group_id, 80)
+    if clean_site:
+        where.append("COALESCE(NULLIF(e.site, ''), p.site, d.site, '') = ?")
+        params.append(clean_site)
+    if clean_device_id:
+        where.append("e.device_id = ?")
+        params.append(clean_device_id)
+    elif clean_door_group_id:
+        device_ids = list_door_group_members(clean_door_group_id)
+        if not device_ids:
+            return []
+        placeholders = ",".join("?" for _ in device_ids)
+        where.append(f"e.device_id IN ({placeholders})")
+        params.extend(device_ids)
+    with db_store._conn() as c:
+        rows = c.execute(
+            f"""
+            SELECT e.person_id, e.event_type, e.occurred_at,
+                   COALESCE(NULLIF(e.site, ''), p.site, d.site, '') AS site,
+                   p.full_name AS full_name, p.document_id AS document_id,
+                   p.enrollment_code AS enrollment_code
+            FROM access_events e
+            LEFT JOIN access_people p ON p.tenant_slug=e.tenant_slug AND p.id=e.person_id
+            LEFT JOIN access_devices d ON d.tenant_slug=e.tenant_slug AND d.id=e.device_id
+            WHERE {' AND '.join(where)}
+            ORDER BY e.person_id, e.occurred_at DESC, e.synced_at DESC
+            """,
+            tuple(params),
+        ).fetchall()
+    latest: Dict[str, Any] = {}
+    for row in rows:
+        person_id = str(row["person_id"] or "")
+        if person_id and person_id not in latest:
+            latest[person_id] = row
+    present: List[Dict[str, Any]] = []
+    for person_id, row in latest.items():
+        if normalize_access_event_type(row["event_type"]) != "entrada":
+            continue
+        present.append({
+            "person_id": person_id,
+            "name": (str(row["full_name"] or "").strip() or "Pessoa nao identificada"),
+            "site": str(row["site"] or "").strip(),
+            "document": str(row["document_id"] or "").strip(),
+            "enrollment": str(row["enrollment_code"] or "").strip(),
+            "since": str(row["occurred_at"] or "").strip(),
+        })
+    present.sort(key=lambda item: item.get("since") or "", reverse=True)
+    return present
 
 
 def access_report_summary(filters: Dict[str, Any]) -> Dict[str, int]:

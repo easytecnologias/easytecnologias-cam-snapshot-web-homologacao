@@ -36,7 +36,7 @@ from app.services.access_control_sync import (
 def test_resolve_and_provision() -> None:
     token = set_current_tenant_slug("cliente-sync")
     try:
-        person = save_person({"full_name": "Ana Teste", "site": "Sede"})
+        person = save_person({"full_name": "Ana Teste", "document_id": "11111111111", "site": "Sede"})
         device = save_device({
             "name": "Catraca Portao", "site": "Sede", "vendor": "dahua",
             "host": "10.10.13.33", "username": "admin", "password": "SenhaTeste2011",
@@ -66,7 +66,7 @@ def test_provision_failure_is_recorded_not_raised() -> None:
 
     token = set_current_tenant_slug("cliente-sync-2")
     try:
-        person = save_person({"full_name": "Bruno Teste", "site": "Sede"})
+        person = save_person({"full_name": "Bruno Teste", "document_id": "22222222222", "site": "Sede"})
         device = save_device({
             "name": "Catraca Portao", "site": "Sede", "vendor": "dahua",
             "host": "10.10.13.33", "username": "admin", "password": "SenhaTeste2011",
@@ -95,7 +95,7 @@ def test_provision_failure_is_recorded_not_raised() -> None:
 def test_resolve_ignores_inactive_rule_and_inactive_device() -> None:
     token = set_current_tenant_slug("cliente-sync-3")
     try:
-        person = save_person({"full_name": "Carla Teste", "site": "Sede"})
+        person = save_person({"full_name": "Carla Teste", "document_id": "33333333333", "site": "Sede"})
         device = save_device({
             "name": "Catraca Portao", "site": "Sede", "vendor": "dahua",
             "host": "10.10.13.33", "username": "admin", "password": "SenhaTeste2011",
@@ -134,7 +134,7 @@ def test_resolve_ignores_inactive_rule_and_inactive_device() -> None:
 def test_resolve_returns_empty_for_person_with_no_groups() -> None:
     token = set_current_tenant_slug("cliente-sync-4")
     try:
-        person = save_person({"full_name": "Diego Teste", "site": "Sede"})
+        person = save_person({"full_name": "Diego Teste", "document_id": "44444444444", "site": "Sede"})
         targets = resolve_target_devices_for_person(person["id"])
         assert targets == []
     finally:
@@ -144,7 +144,7 @@ def test_resolve_returns_empty_for_person_with_no_groups() -> None:
 def test_retry_pending_provisions_marks_success() -> None:
     token = set_current_tenant_slug("cliente-sync-5")
     try:
-        person = save_person({"full_name": "Elis Teste", "site": "Sede"})
+        person = save_person({"full_name": "Elis Teste", "document_id": "55555555555", "site": "Sede"})
         device = save_device({
             "name": "Catraca Portao", "site": "Sede", "vendor": "dahua",
             "host": "10.10.13.33", "username": "admin", "password": "SenhaTeste2011",
@@ -172,6 +172,7 @@ def test_retry_pending_provisions_loads_saved_face_photo() -> None:
     try:
         person = save_person({
             "full_name": "Elishafan Teste",
+            "document_id": "66666666666",
             "site": "Sede",
             "controller_user_id": "1001",
         })
@@ -260,6 +261,7 @@ def test_poll_device_events_links_registered_people_and_uses_door_direction() ->
     try:
         person = save_person({
             "full_name": "Aluno Relatorio",
+            "document_id": "77777777777",
             "site": "ESCOLA",
             "controller_user_id": "42",
             "enrollment_code": "2026",
@@ -357,6 +359,7 @@ def test_connector_push_event_records_immediately_in_connector_tenant() -> None:
         })["connector"]
         person = save_person({
             "full_name": "Aluno Push",
+            "document_id": "88888888888",
             "site": "ESCOLA",
             "controller_user_id": "77",
             "enrollment_code": "2077",

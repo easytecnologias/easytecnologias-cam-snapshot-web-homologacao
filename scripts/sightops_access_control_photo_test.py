@@ -32,7 +32,7 @@ def test_face_photo_is_tenant_scoped_and_normalized_for_controller() -> None:
         tenant_context.DATA_DIR = tmp
         token = set_current_tenant_slug("escola-fotos")
         try:
-            person = save_person({"full_name": "Aluno Foto", "controller_user_id": "1001"})
+            person = save_person({"full_name": "Aluno Foto", "document_id": "11111111111", "controller_user_id": "1001"})
             src = Image.new("RGB", (900, 1200), "#f0c090")
             raw = BytesIO()
             src.save(raw, format="PNG")

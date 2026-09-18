@@ -34,7 +34,7 @@ def main() -> None:
                 {
                     "full_name": "Aluno Teste",
                     "person_type": "student",
-                    "document_id": "123",
+                    "document_id": "12345678901",
                     "site": "ESCOLA",
                     "active": True,
                 }
@@ -102,7 +102,7 @@ def main() -> None:
             assert len(entry_events) == 1, entry_events
             assert entry_events[0]["site"] == "ESCOLA", entry_events
             assert entry_events[0]["device_name"] == "Portaria Entrada", entry_events
-            assert entry_events[0]["person_document"] == "123", entry_events
+            assert entry_events[0]["person_document"] == "12345678901", entry_events
 
             manual_events = list_access_report_events({"period": "all", "type": "saida_manual", "site": "ESCOLA"})
             assert len(manual_events) == 1, manual_events

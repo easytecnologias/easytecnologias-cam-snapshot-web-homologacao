@@ -13,6 +13,7 @@ import logging
 
 from app.services.access_control_store import (
     access_control_summary,
+    access_present_people,
     access_report_summary,
     delete_device,
     delete_door_group,
@@ -71,6 +72,12 @@ from app.services.access_control_whatsapp_inbound import (
     reject_access_whatsapp_triage_item,
     update_access_whatsapp_triage_item,
     verify_access_whatsapp_inbound_token,
+)
+from app.services.access_control_whatsapp_log import (
+    list_conversations as list_whatsapp_conversations,
+    list_messages as list_whatsapp_messages,
+    log_inbound_message,
+    update_message_status,
 )
 from app.core.tenant_context import reset_current_tenant_slug, set_current_tenant_slug
 
@@ -319,6 +326,16 @@ def api_access_control_whatsapp_inbound_info(request: Request) -> Dict[str, Any]
     }
 
 
+@router.get("/whatsapp/conversations")
+def api_access_control_whatsapp_conversations() -> Dict[str, Any]:
+    return {"ok": True, "conversations": list_whatsapp_conversations()}
+
+
+@router.get("/whatsapp/conversations/{numero}/messages")
+def api_access_control_whatsapp_conversation_messages(numero: str) -> Dict[str, Any]:
+    return {"ok": True, "messages": list_whatsapp_messages(numero)}
+
+
 @router.post("/whatsapp/inbound/simulate")
 def api_access_control_whatsapp_inbound_simulate(req: AccessWhatsappInboundSimulateRequest) -> Dict[str, Any]:
     payload = req.model_dump() if hasattr(req, "model_dump") else req.dict()
@@ -466,10 +483,22 @@ async def api_access_control_whatsapp_meta_webhook(tenant_slug: str, request: Re
                     "WhatsApp %s para %s (%s)",
                     st.get("status"), st.get("recipient"), st.get("message_id"),
                 )
+            try:
+                update_message_status(st.get("message_id"), st.get("status"), error=st.get("error") or "")
+            except Exception:
+                logger.exception("Falha ao atualizar status de WhatsApp no historico")
 
         recebidas = extract_meta_inbound(payload)
         if not recebidas.get("from_number"):
             return {"ok": True, "handled": "status"}
+
+        try:
+            log_inbound_message(
+                recebidas["from_number"], recebidas.get("text") or "",
+                from_name=recebidas.get("from_name") or "",
+            )
+        except Exception:
+            logger.exception("Falha ao registrar mensagem recebida do WhatsApp no historico")
 
         try:
             result = process_access_whatsapp_inbound(payload)
@@ -937,6 +966,16 @@ def api_access_control_report_events(
     }
     events = list_access_report_events(filters)
     return {"ok": True, "count": len(events), "events": events}
+
+
+@router.get("/reports/present")
+def api_access_control_report_present(
+    site: str = Query(""),
+    device_id: str = Query(""),
+    door_group_id: str = Query(""),
+) -> Dict[str, Any]:
+    people = access_present_people(site=site, device_id=device_id, door_group_id=door_group_id)
+    return {"ok": True, "count": len(people), "people": people}
 
 
 @router.get("/live/stream")

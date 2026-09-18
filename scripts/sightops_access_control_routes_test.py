@@ -62,7 +62,7 @@ def test_new_routes_registered() -> None:
 def test_face_photo_get_route_serves_saved_jpeg() -> None:
     token = set_current_tenant_slug("cliente-face-photo-get")
     try:
-        person = save_person({"full_name": "Aluno Foto", "controller_user_id": "1001"})
+        person = save_person({"full_name": "Aluno Foto", "document_id": "11111111111", "controller_user_id": "1001"})
         with patch("app.api.endpoints.access_control.load_person_face_photo", return_value=b"jpg-bytes"):
             response = api_access_control_person_face_photo_get(person["id"])
         assert response.media_type == "image/jpeg"
@@ -103,7 +103,7 @@ def test_device_connection_test_updates_status_and_model() -> None:
 def test_people_list_includes_provision_summary() -> None:
     token = set_current_tenant_slug("cliente-people-status")
     try:
-        person = save_person({"full_name": "Elishafan Status", "site": "Sede"})
+        person = save_person({"full_name": "Elishafan Status", "document_id": "22222222222", "site": "Sede"})
         ok_device = save_device({
             "name": "Intelbras Entrada",
             "site": "Sede",
@@ -137,7 +137,7 @@ def test_people_list_includes_provision_summary() -> None:
 def test_manual_person_sync_returns_updated_provision_summary() -> None:
     token = set_current_tenant_slug("cliente-manual-sync")
     try:
-        person = save_person({"full_name": "Elishafan Manual", "site": "Sede"})
+        person = save_person({"full_name": "Elishafan Manual", "document_id": "33333333333", "site": "Sede"})
         device = save_device({
             "name": "Intelbras Portaria",
             "site": "Sede",
@@ -180,7 +180,7 @@ def test_normal_setup_order_enqueues_provisioning() -> None:
     /people/{id}/sync aqui de proposito."""
     token = set_current_tenant_slug("cliente-provision-order")
     try:
-        person = save_person({"full_name": "Ana Ordem", "site": "Sede"})
+        person = save_person({"full_name": "Ana Ordem", "document_id": "44444444444", "site": "Sede"})
         device = save_device({
             "name": "Catraca Portao", "site": "Sede", "vendor": "dahua",
             "host": "10.10.13.33", "username": "admin", "password": "xzydsP2011",
@@ -213,7 +213,7 @@ def test_adding_member_to_existing_group_enqueues_provisioning() -> None:
     depois. Salvar o grupo (unica acao do operador) tem que enfileirar."""
     token = set_current_tenant_slug("cliente-provision-membro")
     try:
-        first = save_person({"full_name": "Bruno Antigo", "site": "Sede"})
+        first = save_person({"full_name": "Bruno Antigo", "document_id": "55555555555", "site": "Sede"})
         device = save_device({
             "name": "Catraca Portao", "site": "Sede", "vendor": "dahua",
             "host": "10.10.13.33", "username": "admin", "password": "xzydsP2011",
@@ -229,7 +229,7 @@ def test_adding_member_to_existing_group_enqueues_provisioning() -> None:
         )
         assert _pending_pairs() == {(first["id"], device["id"])}
 
-        segundo = save_person({"full_name": "Carla Nova", "site": "Sede"})
+        segundo = save_person({"full_name": "Carla Nova", "document_id": "66666666666", "site": "Sede"})
         api_access_control_save_group(
             AccessGroupRequest(
                 id=group["id"], name="Alunos", site="Sede", member_ids=[first["id"], segundo["id"]]
@@ -248,7 +248,7 @@ def test_new_device_in_door_group_enqueues_provisioning() -> None:
     tem que enfileirar as pessoas alcancadas por essa regra."""
     token = set_current_tenant_slug("cliente-provision-porta")
     try:
-        person = save_person({"full_name": "Diego Teste", "site": "Sede"})
+        person = save_person({"full_name": "Diego Teste", "document_id": "77777777777", "site": "Sede"})
         device = save_device({
             "name": "Catraca A", "site": "Sede", "vendor": "dahua",
             "host": "10.10.13.33", "username": "admin", "password": "xzydsP2011",

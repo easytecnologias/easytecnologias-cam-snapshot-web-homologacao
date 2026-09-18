@@ -35,6 +35,7 @@ def test_people_are_tenant_scoped() -> None:
             person = save_person(
                 {
                     "full_name": "Aluno Teste",
+                    "document_id": "11111111111",
                     "person_type": "student",
                     "enrollment_code": "A-001",
                     "guardian_name": "Responsavel",
@@ -71,9 +72,9 @@ def test_list_people_filters_by_type() -> None:
 
         token = set_current_tenant_slug("escola-tipo")
         try:
-            save_person({"full_name": "Aluno Um", "person_type": "student"})
-            save_person({"full_name": "Func Um", "person_type": "employee"})
-            save_person({"full_name": "Visita Um", "person_type": "visitor"})
+            save_person({"full_name": "Aluno Um", "document_id": "11111111111", "person_type": "student"})
+            save_person({"full_name": "Func Um", "document_id": "22222222222", "person_type": "employee"})
+            save_person({"full_name": "Visita Um", "document_id": "33333333333", "person_type": "visitor"})
 
             assert len(list_people()) == 3
             assert [p["full_name"] for p in list_people(person_type="student")] == ["Aluno Um"]
@@ -94,9 +95,9 @@ def test_list_people_filters_by_site_and_lists_distinct_sites() -> None:
 
         token = set_current_tenant_slug("escola-site")
         try:
-            save_person({"full_name": "Aluno Sede", "site": "Sede"})
-            save_person({"full_name": "Aluno Anexo", "site": "Anexo"})
-            save_person({"full_name": "Aluno Sem Site", "site": ""})
+            save_person({"full_name": "Aluno Sede", "document_id": "11111111111", "site": "Sede"})
+            save_person({"full_name": "Aluno Anexo", "document_id": "22222222222", "site": "Anexo"})
+            save_person({"full_name": "Aluno Sem Site", "document_id": "33333333333", "site": ""})
 
             assert list_people_sites() == ["Anexo", "Sede"]
             assert [p["full_name"] for p in list_people(site="Sede")] == ["Aluno Sede"]
@@ -119,6 +120,7 @@ def test_person_stores_controller_id_and_face_photo_path() -> None:
             person = save_person(
                 {
                     "full_name": "Elishafan Teste",
+                    "document_id": "11111111111",
                     "site": "Sede",
                     "controller_user_id": "1001",
                 }

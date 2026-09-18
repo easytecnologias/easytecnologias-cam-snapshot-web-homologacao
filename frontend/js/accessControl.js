@@ -951,6 +951,13 @@ async function saveAccessPersonFromForm(event) {
     showToast('Informe o nome da pessoa.', true);
     return;
   }
+  const cpfDigitos = payload.document_id.replace(/\D/g, '');
+  if (cpfDigitos.length !== 11) {
+    showToast('Informe o CPF (11 digitos) da pessoa.', true);
+    document.getElementById('accessPersonDocument')?.focus();
+    return;
+  }
+  payload.document_id = cpfDigitos;
   if (payload.whatsapp_enabled && !payload.guardian_phone) {
     showToast('Informe o WhatsApp do responsavel ou desmarque o envio de notificacoes.', true);
     document.getElementById('accessPersonPhone')?.focus();
