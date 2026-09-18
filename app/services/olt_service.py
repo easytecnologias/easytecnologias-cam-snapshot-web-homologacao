@@ -25,10 +25,6 @@ from app.models.requests import (
     OltRebootOnuRequest,
 )
 from app.cli.tools.olt_8820i_collect_macs import collect_macs_8820i, collect_onu_telemetry_8820i
-from app.services import connector_routing_vnat as _vnat
-from app.services.camera_allowlist import is_allowed as allowlist_is_allowed
-from app.services.olt_ignore_list import is_ignored_olt_row
-from app.services.onu_action_log import log_onu_action
 from app.cli.tools.olt_4840e_collect_macs import collect_macs_4840e
 from app.cli.tools.olt_4840e_add_onu import (
     OnuAddError as Olt4840eAddOnuError,
@@ -63,17 +59,28 @@ from app.cli.tools.olt_8820i_add_onu import (
 )
 from app.services.db_store import load_olt_cpe_state, save_olt_cpe_state
 from app.services.inventory_json import inventory_row_key, load_inventory_json, save_inventory_json
-from app.services.connector_service import ensure_connector_targets_allowed, get_connector, list_connectors
+from app.services.connector_service import get_connector, list_connectors
 from app.services.olt_capabilities import require_olt_capability
+from app.services.onu_action_log import log_onu_action
 
 logger = logging.getLogger("cam-snapshot")
 
 
+
 def _is_vsol(req: Any) -> bool:
-    """OLT VSOL EPON -- identificada pelo fabricante ou pelo modelo."""
-    vendor = str(getattr(req, "olt_vendor", "") or getattr(req, "vendor", "") or "").strip().lower()
-    model = str(getattr(req, "olt_model", "") or "").strip().lower().replace("_", "-")
-    return vendor in ("vsol", "v-sol", "vsolution") or model.startswith(("vsol", "v1600", "epon-olt"))
+    """OLT VSOL EPON -- identificada pelo fabricante ou pelo modelo.
+
+    Mesmo criterio ja usado na coleta de MACs; virou funcao porque agora quatro
+    operacoes precisam da mesma decisao.
+    """
+    vendor = _norm_text(getattr(req, "olt_vendor", "")).lower()
+    model = _norm_text(getattr(req, "olt_model", "")).lower()
+    return vendor in ("vsol", "v-sol", "vsolution") or model.startswith(("vsol", "v1600", "epon"))
+
+
+def _is_intelbras_4840e(req: Any) -> bool:
+    model = _norm_text(getattr(req, "olt_model", "") or getattr(req, "model", "")).lower()
+    return model in {"4840e", "4840", "intelbras_4840e", "intelbras-4840e", "4840e_epon", "4840e-epon"}
 
 
 def _discover_vsol_por_pon(req: Any) -> Dict[str, Any]:
@@ -83,7 +90,7 @@ def _discover_vsol_por_pon(req: Any) -> Dict[str, Any]:
     de conexao) esperam um mapa por PON com a chave `discovered`, como a 8820i
     entrega. Sem adaptar, a tela mostraria zero mesmo com a OLT respondendo.
     """
-    _arm_olt_reach(req)
+    _virtualize_olt_ip(req)
     bruto = discover_onus_vsol(
         olt_ip=req.olt_ip, user=req.user, password=req.password, pon=req.pon,
     )
@@ -92,34 +99,6 @@ def _discover_vsol_por_pon(req: Any) -> Dict[str, Any]:
         alvo = _norm_text(onu.get("pon")) or _norm_text(getattr(req, "pon", "")) or "all"
         pons.setdefault(alvo, {"discovered": []})["discovered"].append(onu)
     return {"ok": True, "pons": pons, "total": bruto.get("total", 0)}
-
-
-def _is_intelbras_4840e(req: Any) -> bool:
-    model = _norm_text(getattr(req, "olt_model", "") or getattr(req, "model", "")).lower()
-    return model in {"4840e", "4840", "intelbras_4840e", "intelbras-4840e", "4840e_epon", "4840e-epon"}
-
-
-def _validate_olt_target_connector(req: Any) -> None:
-    """Confere que o IP da OLT desta acao esta na LAN do conector informado.
-
-    Ao contrario de `_validate_olt_network_context`, nao exige `scan_origin`
-    (discover/add/find/delete/onu_signal nao tem esse campo no request model)
-    -- dispara sempre que `remote_connector_id`/`connector_id` vier
-    preenchido. Sem isso, era possivel apontar o conector de um site pra IP de
-    outro e a acao seguia em frente sem checar se o alvo faz sentido ali.
-    """
-    connector_id = str(
-        getattr(req, "remote_connector_id", None) or getattr(req, "connector_id", None) or ""
-    ).strip()
-    if not connector_id:
-        return
-    olt_ip = str(getattr(req, "olt_ip", "") or "").strip()
-    if not olt_ip:
-        return
-    connector = get_connector(connector_id, include_token=False, enforce_tenant=True)
-    if not connector:
-        raise HTTPException(404, "Conector nao encontrado.")
-    ensure_connector_targets_allowed(connector_id, [olt_ip], "IP da OLT", connector=connector)
 
 
 def _validate_olt_network_context(req: OltCollectMacsRequest) -> dict[str, Any] | None:
@@ -150,8 +129,12 @@ def _validate_olt_network_context(req: OltCollectMacsRequest) -> dict[str, Any] 
     connector = get_connector(connector_id, include_token=False, enforce_tenant=True)
     if not connector:
         raise HTTPException(404, "Conector nao encontrado.")
+    # NAO bloquear por status "offline": em conector migrado o heartbeat do agente
+    # vai pro PROD, entao o v3 mostra offline mesmo com o tunel isolado UP. A conexao
+    # real abaixo (IP virtual -> wgc) valida a alcancabilidade de fato; se estiver
+    # mesmo fora, a coleta falha naturalmente com erro claro.
     if str(connector.get("status") or "").lower() != "online":
-        raise HTTPException(409, "Conector offline. Nao foi possivel coletar a OLT remota.")
+        logger.info("OLT via conector %s com status '%s' (heartbeat pode ser do prod); seguindo pelo tunel.", connector_id, connector.get("status"))
     tunnel = connector.get("tunnel") if isinstance(connector.get("tunnel"), dict) else {}
     if not tunnel.get("enabled"):
         raise HTTPException(409, "VPN do conector nao configurada. Prepare a VPN antes de coletar a OLT.")
@@ -281,16 +264,6 @@ def _sync_camera_inventory_from_olt_rows(
 
 def _req_connector_id(req: Any) -> str:
     return _norm_text(getattr(req, "remote_connector_id", "") or getattr(req, "connector_id", ""))
-
-
-def _arm_olt_reach(req: Any) -> None:
-    """Marca o conector desta operacao OLT pro vnat: os drivers virtualizam o IP
-    da OLT so na conexao SSH (conector isolado -> IP virtual). Chamar no inicio de
-    toda operacao; sem conector (coleta local) marca vazio e o IP fica real."""
-    try:
-        _vnat.set_olt_reach_connector(_req_connector_id(req))
-    except Exception:
-        pass
 
 
 def _req_connector_name(req: Any) -> str:
@@ -669,10 +642,28 @@ def _sync_onu_signal_inventory(req: OltOnuSignalRequest, result: dict[str, Any])
     return {"ok": True, "updated": True, "macs": len([r for r in new_rows if r.get("cpe_mac")]), "rows": len(new_rows), "count": len(out_obj["cpes"]), **camera_sync}
 
 
+def _virtualize_olt_ip(req) -> None:
+    """OLT isolada: MARCA o conector desta operacao pro vnat. Os drivers
+    virtualizam SO a conexao SSH (reach_olt_ip) -- o `req.olt_ip` fica REAL.
+
+    Antes esta funcao mutava `req.olt_ip` pro IP virtual, e esse virtual VAZAVA
+    pro inventario (rows gravadas com 10.209.x em vez do IP real da OLT). Agora
+    so arma o contexto; a virtualizacao acontece no ponto de conexao do driver e
+    nao contamina o dado gravado. Gated: sem mapa vnat, reach_olt_ip devolve o
+    IP real, entao site nao isolado nao muda."""
+    try:
+        from app.services import connector_routing_vnat as _vnat
+        _vnat.set_olt_reach_connector(
+            str(getattr(req, "remote_connector_id", None) or getattr(req, "connector_id", None) or "").strip()
+        )
+    except Exception:
+        pass
+
+
 def collect_macs(req: OltCollectMacsRequest) -> Dict[str, Any]:
     """Coleta MACs/CPEs na OLT Intelbras (8820i/4840e) e escreve olt-cpe-macs.json (compat legado)."""
-    _arm_olt_reach(req)
     require_olt_capability(req, "collect_macs", "sincronizar inventario")
+    _virtualize_olt_ip(req)
     connector = _validate_olt_network_context(req)
     connector_id = str(getattr(req, "remote_connector_id", None) or getattr(req, "connector_id", None) or "").strip()
     connector_name = str((connector or {}).get("name") or (connector or {}).get("client") or "").strip()
@@ -683,7 +674,9 @@ def collect_macs(req: OltCollectMacsRequest) -> Dict[str, Any]:
             with redirect_stderr(stderr_buf):
                 with perf_step("OLT_collect_macs_driver"):
                     model = ((req.olt_model or "8820i").strip().lower())
-                    if _is_vsol(req):
+                    if (model.startswith(("vsol", "v1600", "epon"))
+                          or "vsol" in str(getattr(req, "olt_vendor", "") or "").lower()):
+                        # VSOL EPON: driver homologado em 20/08/2026 na OLT de Japaratinga
                         rows = collect_macs_vsol(
                             olt_ip=req.olt_ip,
                             user=req.user,
@@ -850,14 +843,21 @@ def collect_macs(req: OltCollectMacsRequest) -> Dict[str, Any]:
 
 def collect_onu_telemetry(req: OltCollectMacsRequest) -> Dict[str, Any]:
     """Atualiza status/sinal das ONUs preservando MACs e demais dados do inventario."""
-    _arm_olt_reach(req)
     require_olt_capability(req, "telemetry", "coletar telemetria")
+    _virtualize_olt_ip(req)
     connector = _validate_olt_network_context(req)
     model = _norm_text(req.olt_model or "8820i").lower()
     if _is_vsol(req):
-        telemetry = collect_onu_telemetry_vsol(
-            olt_ip=req.olt_ip, user=req.user, password=req.password, pon=req.pon,
-        )
+        try:
+            telemetry = collect_onu_telemetry_vsol(
+                olt_ip=req.olt_ip,
+                user=req.user,
+                password=req.password,
+                pon=req.pon or "all",
+            )
+        except Exception as exc:
+            logger.exception("Erro ao coletar telemetria VSOL da OLT %s", req.olt_ip)
+            raise HTTPException(500, f"Erro ao coletar telemetria VSOL: {exc}") from exc
     elif _is_intelbras_4840e(req):
         try:
             telemetry = collect_onu_telemetry_4840e(
@@ -959,6 +959,18 @@ def collect_onu_telemetry(req: OltCollectMacsRequest) -> Dict[str, Any]:
             existing.append(row)
         updated_positions.add((pon_id, onu_id))
 
+    # ONU que nao veio nesta leitura foi removida da OLT: sai daqui tambem, senao
+    # fica congelada e alerta para sempre.
+    poda = _podar_onus_sumidas(existing, req.olt_ip, updated_positions, req)
+    if poda["removidas"]:
+        logger.info(
+            "OLT %s: %d ONU(s) removidas do inventario por terem sumido da OLT: %s",
+            req.olt_ip, len(poda["removidas"]),
+            ", ".join(f"pon {r['pon']}/onu {r['onu_id']}" for r in poda["removidas"][:10]),
+        )
+    elif poda["motivo"] not in ("", "nada sumiu"):
+        logger.warning("OLT %s: poda de ONUs nao aplicada -- %s", req.olt_ip, poda["motivo"])
+
     out_obj = {
         **{key: value for key, value in obj.items() if key not in ("cpes", "rows")},
         "olt": obj.get("olt") if isinstance(obj.get("olt"), dict) else {},
@@ -973,6 +985,68 @@ def collect_onu_telemetry(req: OltCollectMacsRequest) -> Dict[str, Any]:
         "with_signal": with_signal,
         "rows": len(out_obj["cpes"]),
         "camera_sync": camera_sync,
+        "onus_removidas": len(poda["removidas"]),
+        "poda_motivo": poda["motivo"],
+    }
+
+
+def _podar_onus_sumidas(
+    linhas: list[dict[str, Any]],
+    olt_ip: str,
+    posicoes_lidas: set[tuple[int, int]],
+    req: Any,
+) -> dict[str, Any]:
+    """Remove as linhas da OLT `olt_ip` que nao vieram nesta leitura.
+
+    Devolve o que foi removido e o motivo, para o chamador registrar no log --
+    poda silenciosa e o que faz ninguem perceber que perdeu dado.
+    """
+    olt_ip = _norm_text(olt_ip)
+    if not olt_ip or not posicoes_lidas:
+        return {"removidas": [], "motivo": "leitura vazia"}
+
+    da_olt = [
+        r for r in linhas
+        if _norm_text(r.get("olt_ip")) == olt_ip and _same_connector_scope(r, req)
+    ]
+    if not da_olt:
+        return {"removidas": [], "motivo": "nenhuma linha desta OLT"}
+
+    # Trava 1: a leitura precisa cobrir as PONs que ja conheciamos. Coleta que
+    # falhou no meio traz poucas PONs, e apagaria as outras inteiras.
+    pons_lidas = {p for p, _ in posicoes_lidas}
+    pons_conhecidas = {int(r.get("pon") or 0) for r in da_olt if str(r.get("pon") or "").strip().isdigit()}
+    faltando = pons_conhecidas - pons_lidas
+    if faltando:
+        return {"removidas": [],
+                "motivo": f"leitura incompleta: sem dado das PON(s) {sorted(faltando)}"}
+
+    def _posicao(row):
+        try:
+            return (int(row.get("pon") or 0), int(row.get("onu_id") or 0))
+        except (TypeError, ValueError):
+            return (0, 0)
+
+    sumidas = [r for r in da_olt if _posicao(r) not in posicoes_lidas and _posicao(r) != (0, 0)]
+    if not sumidas:
+        return {"removidas": [], "motivo": "nada sumiu"}
+
+    # Trava 2: percentual. Perder uma fatia grande de uma vez costuma ser falha
+    # de coleta, nao ONU removida de verdade.
+    limite = max(5, int(len(da_olt) * 0.20))
+    if len(sumidas) > limite:
+        return {"removidas": [],
+                "motivo": (f"{len(sumidas)} de {len(da_olt)} linhas sumiram de uma vez "
+                           f"(limite {limite}); nada removido, confira a coleta")}
+
+    alvo = {id(r) for r in sumidas}
+    linhas[:] = [r for r in linhas if id(r) not in alvo]
+    return {
+        "removidas": [
+            {"pon": r.get("pon"), "onu_id": r.get("onu_id"), "serial": r.get("onu_serial")}
+            for r in sumidas
+        ],
+        "motivo": "",
     }
 
 
@@ -1081,10 +1155,13 @@ def list_macs(site: str = "") -> Dict[str, Any]:
 
 
 def discover_onus(req: OltDiscoverOnusRequest) -> Dict[str, Any]:
-    """Descobre ONUs nao autorizadas ou lista ocupacao por driver homologado."""
-    _arm_olt_reach(req)
+    """Descobre ONUs nao autorizadas + posicoes livres na OLT Intelbras 8820i.
+
+    So a 8820i tem esse fluxo mapeado por enquanto (a 4840e nao tem comando
+    de autorizacao confirmado ainda).
+    """
+    _virtualize_olt_ip(req)
     require_olt_capability(req, "discover_onus", "descobrir ONUs")
-    _validate_olt_target_connector(req)
     with perf_step("OLT_discover_onus"):
         try:
             if _is_vsol(req):
@@ -1138,7 +1215,7 @@ def _vlan_summary_from_macs(macs: Any) -> str:
 def add_onu(req: OltAddOnuRequest) -> Dict[str, Any]:
     """Autoriza uma ONU descoberta (serno_id) na OLT Intelbras 8820i, com
     servico/VLAN opcional. Equipamento vivo -- ver aviso na UI de Implantacao."""
-    _arm_olt_reach(req)
+    _virtualize_olt_ip(req)
     require_olt_capability(req, "add_onu", "autorizar ONU")
     profile = (req.profile or "").strip() or profile_for_model(req.onu_model, req.terminal)
     services = [{"service": e.service, "vlan": e.vlan} for e in req.services] if req.services else None
@@ -1221,7 +1298,7 @@ def add_onu_bridge(req: OltAddOnuBridgeRequest) -> Dict[str, Any]:
     `add_onu` autorizou a ONU mas o `bridge add` falhou (tipo de bridge
     errado pra VLAN, ou a ONU ainda nao tinha assentado) -- antes disso so
     dava pra corrigir entrando na OLT direto. Equipamento vivo."""
-    _arm_olt_reach(req)
+    _virtualize_olt_ip(req)
     require_olt_capability(req, "add_onu", "aplicar servico/VLAN")
     services = [{"service": e.service, "vlan": e.vlan} for e in req.services] if req.services else None
     vlan_summary = _vlan_summary_from_services(req.services, req.vlan)
@@ -1264,12 +1341,27 @@ def add_onu_bridge(req: OltAddOnuBridgeRequest) -> Dict[str, Any]:
 
 
 def find_onu(req: OltFindOnuRequest) -> Dict[str, Any]:
-    """Localiza uma ONU ja autorizada pelo serial (8820i) ou MAC (4840E)."""
-    _arm_olt_reach(req)
+    """Localiza uma ONU ja autorizada pelo serial, na OLT Intelbras 8820i."""
+    _virtualize_olt_ip(req)
     require_olt_capability(req, "find_onu", "localizar ONU")
     with perf_step("OLT_find_onu"):
         try:
-            if _is_intelbras_4840e(req):
+            if _is_vsol(req):
+                # Nesta OLT (EPON) o "serial" e o MAC da ONU.
+                row = find_onu_vsol(
+                    olt_ip=req.olt_ip,
+                    user=req.user,
+                    password=req.password,
+                    serial=req.serial,
+                    timeout=req.timeout,
+                )
+                found = ({
+                    "pon": row.get("pon"),
+                    "onu": row.get("onu_id"),
+                    "serial": row.get("onu_mac"),
+                    "model": row.get("modelo"),
+                } if row else None)
+            elif _is_intelbras_4840e(req):
                 found = find_onu_4840e(
                     olt_ip=req.olt_ip, user=req.user, password=req.password,
                     mac=req.serial, timeout=req.timeout,
@@ -1339,8 +1431,10 @@ def _clear_deleted_onu_from_camera_inventory(req: OltDeleteOnuRequest) -> Dict[s
 
 
 def delete_onu(req: OltDeleteOnuRequest) -> Dict[str, Any]:
-    """Exclui uma ONU ja autorizada (posicao pon/onu) na OLT 8820i ou 4840E."""
-    _arm_olt_reach(req)
+    """Exclui uma ONU ja autorizada (posicao pon/onu) na OLT Intelbras 8820i.
+
+    Equipamento vivo -- remove o cadastro e desliga o servico da ONU."""
+    _virtualize_olt_ip(req)
     require_olt_capability(req, "delete_onu", "excluir ONU")
     with perf_step("OLT_delete_onu"):
         try:
@@ -1381,7 +1475,7 @@ def delete_onu(req: OltDeleteOnuRequest) -> Dict[str, Any]:
 
 def reboot_onu(req: OltRebootOnuRequest) -> Dict[str, Any]:
     """Reinicia uma ONU/ONT ja autorizada (8820i ou 4840E)."""
-    _arm_olt_reach(req)
+    _virtualize_olt_ip(req)
     require_olt_capability(req, "reboot_onu", "reiniciar ONU")
     with perf_step("OLT_reboot_onu"):
         try:
@@ -1418,27 +1512,32 @@ def reboot_onu(req: OltRebootOnuRequest) -> Dict[str, Any]:
 
 
 def onu_signal(req: OltOnuSignalRequest) -> Dict[str, Any]:
-    """Consulta sinal e MACs de uma ONU ja autorizada (8820i ou 4840E)."""
-    _arm_olt_reach(req)
+    """Consulta sinal (RX/distancia/status) e MACs aprendidos atras de uma
+    ONU ja autorizada na OLT Intelbras 8820i. Aceita serial OU pon+onu."""
+    _virtualize_olt_ip(req)
     require_olt_capability(req, "onu_signal", "consultar sinal/MACs")
     with perf_step("OLT_onu_signal"):
         try:
-            if _is_intelbras_4840e(req):
+            if _is_vsol(req):
+                # O driver devolve os dados crus da ONU; o "ok" e contrato deste
+                # servico, nao do driver. Potencia optica real via
+                # `show onu opm-diag` (2026-09-01) -- o comando anterior
+                # (`monitor_status`) so informava se o monitoramento periodico
+                # estava ligado, nunca a leitura de verdade.
+                result = dict(onu_signal_vsol(
+                    olt_ip=req.olt_ip,
+                    user=req.user,
+                    password=req.password,
+                    pon=req.pon,
+                    onu_id=req.onu,
+                    timeout=req.timeout,
+                ) or {})
+                result.setdefault("ok", True)
+            elif _is_intelbras_4840e(req):
                 result = onu_signal_4840e(
                     olt_ip=req.olt_ip, user=req.user, password=req.password,
                     pon=req.pon, onu=req.onu, timeout=req.timeout,
                 )
-                if result.get("ok"):
-                    _enrich_signal_macs_with_ips(result)
-            elif _is_vsol(req):
-                result = {
-                    "ok": True,
-                    **onu_signal_vsol(
-                        olt_ip=req.olt_ip, user=req.user, password=req.password,
-                        pon=str(req.pon), onu_id=req.onu, timeout=req.timeout,
-                    ),
-                }
-                _enrich_signal_macs_with_ips(result)
             else:
                 result = _onu_signal_8820i(
                     olt_ip=req.olt_ip,
@@ -1449,8 +1548,9 @@ def onu_signal(req: OltOnuSignalRequest) -> Dict[str, Any]:
                     serial=req.serial,
                     timeout=req.timeout,
                 )
-                if result.get("ok"):
-                    _enrich_signal_macs_with_ips(result)
+            if result.get("ok"):
+                _enrich_signal_macs_with_ips(result)
+                if not _is_intelbras_4840e(req) and not _is_vsol(req):
                     result["inventory"] = _sync_onu_signal_inventory(req, result)
             log_onu_action(
                 "onu_signal", olt_id=req.olt_id, olt_ip=req.olt_ip, olt_name=req.olt_name, site=req.site,
