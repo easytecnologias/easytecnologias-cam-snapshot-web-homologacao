@@ -247,7 +247,7 @@ const NVR_COLS = {
     heads: ['','Host NVR','Modelo NVR','CH','Titulo','Local','Status','ImgBB','IP Camera','Modelo Cam.','MAC Camera','Serial','V.Loss'],
     row: r => [
       `<input type="checkbox" class="chk-nvr" value="${esc(r.host+'_'+r.channel)}" data-host="${esc(r.host||'')}" data-channel="${esc(String(r.channel||''))}">`,
-      `<span class="monospace" title="${esc(r.host||'')}">${esc(r.host||'')}</span>`,
+      `<span title="${esc(r.host||'')}"><strong>${esc(recHostName(r.host))}</strong><span class="monospace text-muted" style="font-size:10px;display:block">${esc(r.host||'')}</span></span>`,
       `<span class="text-muted" title="${esc(r.nvr_model||'')}">${esc(r.nvr_model||'')}</span>`,
       `<span style="text-align:center;display:block">${esc(String(r.channel??''))}</span>`,
       `<strong title="${esc(r.title||'')}">${esc(recDisplayTitle(r))}</strong>`,
@@ -270,7 +270,7 @@ const NVR_COLS = {
     heads: ['','Host NVR','CH','Titulo','Local','Status','ImgBB','IP Camera','Modelo Cam.','PON','ONU ID','ONU Name','ONU Serial'],
     row: r => [
       `<input type="checkbox" class="chk-nvr" value="${esc(r.host+'_'+r.channel)}" data-host="${esc(r.host||'')}" data-channel="${esc(String(r.channel||''))}">`,
-      `<span class="monospace" title="${esc(r.host||'')}">${esc(r.host||'')}</span>`,
+      `<span title="${esc(r.host||'')}"><strong>${esc(recHostName(r.host))}</strong><span class="monospace text-muted" style="font-size:10px;display:block">${esc(r.host||'')}</span></span>`,
       `<span style="text-align:center;display:block">${esc(String(r.channel??''))}</span>`,
       `<strong title="${esc(r.title||'')}">${esc(recDisplayTitle(r))}</strong>`,
       `<span title="${esc(r.local||'')}">${esc(r.local||'')}</span>`,
@@ -291,7 +291,7 @@ const NVR_COLS = {
     heads: ['','Host NVR','CH','Titulo','Local','Status','ImgBB','IP Camera','Modelo Cam.','Switch IP','Porta','VLAN'],
     row: r => [
       `<input type="checkbox" class="chk-nvr" value="${esc(r.host+'_'+r.channel)}" data-host="${esc(r.host||'')}" data-channel="${esc(String(r.channel||''))}">`,
-      `<span class="monospace" title="${esc(r.host||'')}">${esc(r.host||'')}</span>`,
+      `<span title="${esc(r.host||'')}"><strong>${esc(recHostName(r.host))}</strong><span class="monospace text-muted" style="font-size:10px;display:block">${esc(r.host||'')}</span></span>`,
       `<span style="text-align:center;display:block">${esc(String(r.channel??''))}</span>`,
       `<strong title="${esc(r.title||'')}">${esc(recDisplayTitle(r))}</strong>`,
       `<span title="${esc(r.local||'')}">${esc(r.local||'')}</span>`,
@@ -314,7 +314,7 @@ const DVR_COLS = {
     heads: ['','Host DVR','CH','Titulo','Local','Status','ImgBB','MAC DVR','Modelo','Serial','V.Loss','Foto'],
     row: r => [
       `<input type="checkbox" class="chk-nvr" value="${esc(r.host+'_'+r.channel)}" data-host="${esc(r.host||'')}" data-channel="${esc(String(r.channel||''))}">`,
-      `<span class="monospace" title="${esc(r.host||'')}">${esc(r.host||'')}</span>`,
+      `<span title="${esc(r.host||'')}"><strong>${esc(recHostName(r.host))}</strong><span class="monospace text-muted" style="font-size:10px;display:block">${esc(r.host||'')}</span></span>`,
       `<span style="text-align:center;display:block">${esc(String(r.channel??''))}</span>`,
       `<strong title="${esc(r.title||'')}">${esc(recDisplayTitle(r))}</strong>`,
       `<span title="${esc(r.local||'')}">${esc(r.local||'')}</span>`,
@@ -326,7 +326,7 @@ const DVR_COLS = {
       `<span class="text-muted" title="${esc(r.modelo||'')}">${esc(r.modelo||'')}</span>`,
       `<span class="text-muted" title="${esc(r.equip_serial||'')}">${esc(r.equip_serial||'')}</span>`,
       r.video_loss ? `<span style="color:var(--danger);font-weight:600;font-size:11px">SIM</span>` : `<span class="text-muted" style="font-size:11px">nao</span>`,
-      r.snapshot_url ? `<a href="${esc(r.snapshot_url)}" target="_blank" style="color:var(--primary);font-size:12px"> ver</a>` : `<span class="text-muted"></span>`,
+      recSnapshotUrl(r) ? `<a href="${esc(recSnapshotUrl(r))}" target="_blank" style="color:var(--primary);font-size:12px"> ver</a>` : `<span class="text-muted"></span>`,
     ],
   },
   olt: {
@@ -334,7 +334,7 @@ const DVR_COLS = {
     heads: ['','Host DVR','CH','Titulo','Local','Status','ImgBB','PON','ONU ID','ONU Name','ONU Serial','MAC DVR'],
     row: r => [
       `<input type="checkbox" class="chk-nvr" value="${esc(r.host+'_'+r.channel)}" data-host="${esc(r.host||'')}" data-channel="${esc(String(r.channel||''))}">`,
-      `<span class="monospace" title="${esc(r.host||'')}">${esc(r.host||'')}</span>`,
+      `<span title="${esc(r.host||'')}"><strong>${esc(recHostName(r.host))}</strong><span class="monospace text-muted" style="font-size:10px;display:block">${esc(r.host||'')}</span></span>`,
       `<span style="text-align:center;display:block">${esc(String(r.channel??''))}</span>`,
       `<strong title="${esc(r.title||'')}">${esc(recDisplayTitle(r))}</strong>`,
       `<span title="${esc(r.local||'')}">${esc(r.local||'')}</span>`,
@@ -354,7 +354,7 @@ const DVR_COLS = {
     heads: ['','Host DVR','CH','Titulo','Local','Status','ImgBB','Switch IP','Porta','VLAN','MAC DVR'],
     row: r => [
       `<input type="checkbox" class="chk-nvr" value="${esc(r.host+'_'+r.channel)}" data-host="${esc(r.host||'')}" data-channel="${esc(String(r.channel||''))}">`,
-      `<span class="monospace" title="${esc(r.host||'')}">${esc(r.host||'')}</span>`,
+      `<span title="${esc(r.host||'')}"><strong>${esc(recHostName(r.host))}</strong><span class="monospace text-muted" style="font-size:10px;display:block">${esc(r.host||'')}</span></span>`,
       `<span style="text-align:center;display:block">${esc(String(r.channel??''))}</span>`,
       `<strong title="${esc(r.title||'')}">${esc(recDisplayTitle(r))}</strong>`,
       `<span title="${esc(r.local||'')}">${esc(r.local||'')}</span>`,
@@ -470,8 +470,9 @@ function populateNvrFilters() {
   if (selHost) {
     const cur = selHost.value;
     const label = _recType === 'dvr' ? 'Todos os DVRs' : 'Todos os NVRs';
+    const _names = computeDvrDisplayNames();
     selHost.innerHTML = `<option value="">${label}</option>` +
-      hosts.map(h => `<option${h===cur?' selected':''}>${esc(h)}</option>`).join('');
+      hosts.map(h => `<option value="${esc(h)}"${h===cur?' selected':''}>${esc(_names[h]||h)} (${esc(h)})</option>`).join('');
   }
 
   const rows   = _currentNvrRows();
@@ -483,7 +484,13 @@ function populateNvrFilters() {
   setText('nvrVloss',   vloss);
 }
 
+let _dvrDisplayCache = {};
+function recHostName(host) {
+  return _dvrDisplayCache[String(host || '')] || String(host || '');
+}
+
 function applyNvrFilters() {
+  _dvrDisplayCache = computeDvrDisplayNames();
   const q      = (document.getElementById('searchInvNvr')?.value || '').toLowerCase();
   const status = document.getElementById('filterNvrStatus')?.value || '';
   const local  = document.getElementById('filterNvrLocal')?.value  || '';
@@ -989,7 +996,7 @@ async function runRecAction() {
 function recPanelAction(action) {
   if (!_recActive) return;
   if (action === 'web') { window.open(`${API_BASE}/api/maintenance/web/${encodeURIComponent(_recActive.host)}/`, '_blank'); return; }
-  if (action === 'ping') { openPingTerminal(_recActive.host); return; }
+  if (action === 'ping') { openPingTerminal(_recActive.camera_ip || _recActive.host, _recActive.remote_connector_id || _recActive.connector_id || ''); return; }
   openRecAction(action);
 }
 
