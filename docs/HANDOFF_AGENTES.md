@@ -7,6 +7,238 @@ resposta final do agente pro usuário. Entrada mais recente no topo.
 
 ---
 
+## 2026-09-16 — Migração RADS pro v3 CONCLUÍDA (4 conectores, rota antiga VIVA)
+
+**Todos os conectores RADS do prod migrados pro v3** (dual-tunnel, `sightops-wg` antiga viva — NÃO deletar
+até o usuário confirmar): **SANTANA** (wgc4, 224 cam, OLT id5), **BARRA** (wgc5, 267 cam, OLT id7),
+**JAPARATINGA** (wgc6, 61 cam — 60 estavam sem tag, tagueei no merge; OLT VSOL id8), **ESCOLA PRESIDENTE
+DUTRA** (wgc7, 20 cam basic, CGNAT). Registro de índices/portas/vnat e playbook na memória
+`rads-migracao-v3-progresso`. **ESCOLA roda o CONTROLE DE ACESSO** (2 controladoras Intelbras
+192.168.1.201/202, 122 pessoas) — migrei só as câmeras, o controle de acesso FICOU no prod (confirmado
+que as controladoras seguem acessíveis pela rota normal; método é 100% aditivo, não toca rota antiga nem
+main table). Scripts reusáveis no servidor /tmp: merge_conn_inv.py, olt_migrate.sh <id>+olt_insert.py
+(active é INTEGER!), gerar wgcN via split do /tmp/wgc3.sh. Falta: desativar as rotas antigas (quando o
+usuário confirmar), Porto Real do prod (d6d5f830 — v3 tem outro id do PoC), controle de acesso da ESCOLA.
+
+---
+
+## 2026-09-16 — Migração RADS pro v3 (um a um, rota antiga VIVA) — SANTANA feita
+
+Migrando os conectores da RADS pro v3 um a um, mesmo método dual-tunnel do UFV **mas mantendo a
+`sightops-wg` antiga viva** (só desativar quando tiver clareza total). Registro de índices e
+playbook completo na memória `rads-migracao-v3-progresso`. **SANTANA (8e22b6f9)** = index4 (wgc4,
+52004, tab1004, vnat `100.64.8.0/22 → 10.208.192.0/22`): 224 câmeras, credenciais, OLT (Intelbras
+100.64.10.5) — provado (todas alcançáveis 80/554/37777 pela rota isolada), antiga viva, persistido.
+MikroTik SANTANA: SSH 65022, elishafan. Faltam: BARRA(index5), JAPARATINGA(index6), ESCOLA(index7).
+Pegadinhas novas vs UFV: inventário RADS é blob multi-conector (merge, não COPY); OLT tem FK pra
+`sites` e o site já existe no v3 com id diferente (remapear site_id).
+
+---
+
+## 2026-09-16 — Migração do cliente Mega Alarmes (UFV-RODOANEL) prod→v3, conector isolado sem cair
+
+Criado tenant **`mega-alarmes`** no v3 (owner `mega-alarmes` / senha do usuário). Migrado o conector
+**UFV-RODOANEL** (`4fef0f33b137a51e`) — MikroTik RB750Gr3 em **10.0.0.1**, LAN `10.0.0.0/23`,
+**CGNAT sem IP público** (se cair, não reconecta remoto). Acesso ao MikroTik: **SSH porta 2254**,
+usuário **elishafan** (não admin), via `sshpass` do servidor.
+
+**Técnica dual-tunnel (zero-drop):** em vez de trocar a porta do peer (o que o `iso_gen.py` faz =
+switch, derruba), criei uma **2ª interface WG paralela** `sightops-iso` no MikroTik + `wgc3` no
+servidor (porta 52003, tabela 1003, `10.201.0.6↔10.201.0.7`), mantendo a `sightops-wg` (:51820)
+**intacta de reserva**. Pegadinhas: (1) sem `/ip/address 10.201.0.7/31` não há rota de volta
+(allowed-address no RouterOS não cria rota); (2) precisou de **3 regras de firewall** espelho da
+sightops-wg pra sightops-iso (input accept + forward in/out), senão o drop default engole.
+**Provado:** ping isolado 0% perda + **snapshot ao vivo HTTP 200 JPEG** pela rota isolada, com a
+`sightops-wg` ainda viva. Persistido em `/opt/sightops/scripts/connector_iso.sh` (chave `SO2lPUrP...`,
+NÃO a `CZ5Z` que o gerador usaria).
+
+**Dados migrados (aditivo, prod intacto):** `json_state` inventory (16 câmeras switch),
+`planning_*` (projeto UFV, 18 devices — v3 vazio, copiei com ids), `camera_mac/site_credentials`
+(SEM id, v3 já tinha — evita colisão). `SIGHTOPS_SECRET_KEY` **igual** prod/v3 → senha cifrada abre.
+vnat map + connectors.json do v3 receberam o UFV (`10.208.128.0/23 → 10.0.0.0/23`). Repo
+`app/services/zabbix_monitoring_service.py` já em paridade (tupla ampliada — NÃO commitado).
+
+**Badge "Offline" no v3 = cosmético:** o agente do MikroTik faz heartbeat pro **prod** (mantém a
+reserva viva); o v3 nunca recebe check-in. Não tem relação com o túnel (provado). Só repontar o
+agente pro v3 + remover a `sightops-wg` **depois** que o cliente confirmar — nunca antes.
+
+---
+
+## 2026-09-16 — Zabbix PRÓPRIO do v3 + telemetria unificada (câmera/DVR/OLT num caminho só)
+
+Pedido do usuário: (B) o v3 usava o **Zabbix do prod**; separar. (A) ver câmera/DVR/OLT
+num caminho só pro Zabbix em vez do "monte de caminho". Feito no v3 (host `10.10.12.7`,
+via IP público `201.182.184.84` porque a `10.10.12.x` estava fora).
+
+**B — Zabbix separado (PROVADO):** o compose do v3
+(`/home/central/sightops-v3-release/docker-compose.production.yml`) declarava os próprios
+`zabbix-prod-*`/`grafana-prod` (cópias dormentes do clone; nunca subiam, colidiam de nome)
+e o `v3-api` **não falava com Zabbix nenhum** (não resolvia `zabbix-prod-web`, redes
+separadas). Renomeei os blocos p/ **`zabbix-v3-postgres/server/web/agent2` + `grafana-v3`**,
+DB `zabbix_v3`, volumes `zabbix_v3_postgres`/`grafana_v3_data`, agent `sightops-v3-docker-host`,
+caches 64/32M. Portas do host **sem colidir com prod**: web **8091** (prod 8089), server
+**10053** (prod 10052), Grafana **3003** (prod 3002). Senhas próprias no `.env.v3`
+(não reusam prod). Admin do Zabbix v3 teve a senha trocada do padrão; app loga via
+`SIGHTOPS_ZABBIX_WEB_HOST=zabbix-v3-web:8080` + `SIGHTOPS_ZABBIX_USER/PASS` no `.env.v3`.
+Provado: 203 tabelas no `zabbix_v3`, web HTTP 200 na 8091, v3-api loga na API. Backups
+in-place `.bak-20260916-085821-zbxsep`.
+
+**RAM:** host só tinha ~200Mi livres. Para caber, **parei o container
+`backup-20260428-...-unifi-controller`** (UniFi Controller VIVO, ~1,18GB;
+`docker stop` + `docker update --restart=no` — reversível com `docker start`). Cuidado:
+os 3 `backup-*` (unifi, central-telefonica-perucaba, portainer) são serviços vivos apesar
+do nome. Stack Zabbix v3 custou só ~400MB.
+
+**A — telemetria unificada (PROVADO):** já era caminho único —
+`monitoring_service.refresh_from_inventory()` lê status de tudo (inclusive camera/nvr/dvr,
+que agora vêm pelo roteamento isolado) → `monitoring_entities` →
+`zabbix_monitoring_service.sync_monitoring_to_zabbix()` empurra via **push/trapper**
+(item type 2, delay 0 — Zabbix não sonda o device, o app empurra pelo túnel). Só faltava
+a **tupla default de `entity_types`**, que excluía camera/nvr/dvr. Ampliei p/
+`("olt","onu","camera","nvr","dvr","connector","access_device","whatsapp")` — repo
+`app/services/zabbix_monitoring_service.py` já em paridade (NÃO commitado). Orphan-pruning
+usa a mesma tupla (sem host fantasma). Provado: Zabbix v3 tem 8 hosts camera + 1 nvr + 2
+connector com `sightops.status` gravado (camera=1/up, nvr=0/down).
+
+**Deploy que persiste (ARMADILHA):** os patches de código do v3 vivem **só no container**
+(imagem base `pre-netns-snapshot` tem os originais). Qualquer `--force-recreate` SEM
+`commit` antes perde TUDO (nvr/dvr/cameras/vnat desta sessão inclusive). Fluxo usado:
+patch no container → `docker commit sightops-v3-api sightops-prod-api:20260916-zabbix-v3-telemetria`
+(congela todos os patches vivos) → `CAM_SNAPSHOT_IMAGE` no `.env.v3` →
+`docker compose -f docker-compose.production.yml --env-file .env.v3 up -d --no-deps --force-recreate cam-snapshot-api`.
+
+**Falta:** OLT no v3 (sem OLT no inventário de teste); sondagem ATIVA por-device pelo túnel
+(hoje o status vem do último scan; o loop de 120s só RE-LÊ o inventário, não re-sonda).
+
+---
+
+## 2026-09-15 (tarde) — Isolamento por tabelas APLICADO e PROVADO no v3 (sem vazamento)
+
+Continuacao do item abaixo. Aplicado em servidor (host `10.10.12.7`) e **provado
+ponta-a-ponta** com PORTO REAL DO COLEGIO (a04555f5, wgc1/tab1001/52001/10.201.0.2)
+e MATA GRANDE (9de8a046, wgc2/tab1002/52002/10.201.0.4). Prova: mesmo `192.168.10.1`
+pela origem de cada um cai em Mikrotiks diferentes (portas [2000,8291] vs [2000],
+RTT 45 vs 32ms, peers `VURW...` vs `lium...`). Borda `10.10.12.1`: forward
+`dst-nat udp 52000-52099 -> 10.10.12.7` na WAN IMAGEM NET (cobre 100 conectores).
+
+**Duas correcoes que faltavam (nao obvias):**
+1. `rp_filter` strict dropa a resposta (validacao reversa cai na tabela main) ->
+   setar `rp_filter=2` (loose) em `all`+`wgc*`.
+2. RouterOS: `allowed-address` do peer NAO cria rota IP -> cliente precisa
+   `/ip route add dst-address=10.201.0.0/16 gateway=sightops-wg`. **Ja embutido no
+   template do v3** (`app/services/connector_service.py`: job `wireguard_install`
+   linha ~907 e script direto ~1138) + `server_allowed` agora inclui `10.201.0.0/16`.
+   -> conectores novos nascem prontos (automatico). Os 2 legados foram ajustados na mao.
+
+**Deploy do template no v3:** arquivo corrigido em `/tmp/v3_cs.py` no host; subir com
+`docker cp /tmp/v3_cs.py sightops-v3-api:/app/app/services/connector_service.py && docker restart sightops-v3-api`.
+Repo `connector_service.py` ja esta em paridade (NAO commitado).
+
+**Persistencia (runtime -> boot):** systemd oneshot `sightops-connector-routing.service`
+(After `wg-quick@wg-sightops`) + `/opt/sightops/scripts/connector_routing_apply.sh`
+(recria wgc1/wgc2 idempotente, le a privkey do wg-sightops em runtime) +
+`/etc/sysctl.d/99-sightops-wgc.conf` (`all.rp_filter=2`).
+
+**App consome o isolamento — MODELO A escolhido e PROVADO (falta so a fiacao):**
+`sightops-v3-api` roda em bridge (`sightops-v3-platform`), nao na netns do host,
+entao `bound_session` (source-bind) falha no container. Solucao adotada (opcao A):
+**NAT 1:1 por conector com IP virtual** -- o app fala com um IP virtual unico por
+conector; o host faz `NETMAP virtual->real` + `MARK`->tabela do conector + `SNAT`
+pra origem isolada. Sem proxy, sem namespace. **Provado de dentro do container em
+2026-09-15**: `10.208.0.1:8291` (Porto Real, Winbox aberto) conecta e
+`10.208.64.1:8291` (Mata Grande, Winbox fechado) recusa -- mesmo real `192.168.10.1`,
+dois equipamentos, sem vazamento.
+
+Infra no host (runtime + persistida via systemd): `/opt/sightops/scripts/connector_vnat.sh`
+(regras iptables `NETMAP/MARK/SNAT/DOCKER-USER` + `ip rule fwmark`), chamado por
+`ExecStartPost` do `sightops-connector-routing.service`. IMPORTANTE: iptables mora
+em `/usr/sbin` (o shell `su` nao tem no PATH) e o backend e `nf_tables` (NETMAP usa
+`--to`, nao `--to-destination`).
+
+Codigo PRONTO e testado (repo, nao commitado):
+- `ops/connector_routing/allocator.py`: `VIRTUAL_ROOT=10.208.0.0/12`, `/18` por
+  conector (`_virtual_slice`), `virtual_map_for(index, real_cidrs)`. Porto Real idx1
+  -> `10.208.0.0/18`, Mata Grande idx2 -> `10.208.64.0/18`.
+- `app/services/connector_routing_vnat.py`: `virtual_ip_for(connector_id, real_ip)`
+  GATED (le `/app/data/connector_vnat_map.json`; sem mapa -> IP real intacto).
+- `scripts/sightops_connector_vnat_test.py`: passa.
+
+**FALTA (fiacao, precisa deploy no v3 + teste):**
+1. Gerador que escreve `connector_vnat_map.json` no container E as regras do host a
+   partir da MESMA alocacao (ordem das LANs tem que casar entre os dois).
+2. Ligar `virtual_ip_for(connector_id, ip)` nos chamadores que falam com camera por
+   conector: `camsnapshot/device_info.py` (probe_device/get_snapshot), `scan_service`,
+   `ws_scan_service`, `monitoring_service`, `access_control_device`, `rescan_service`,
+   live view/go2rtc e o web-proxy. Trocar o IP alvo (nao amarrar origem). UX: manter
+   o IP REAL exibido pro operador; o virtual e so interno.
+3. Decidir se o go2rtc (binario externo, RTSP) tambem usa o IP virtual.
+
+**Sobra vetada rodando (limpar):** `sightops-netns-provisioner.service`,
+`sightops-netns-proxy@4fef0f33...service`, `/opt/sightops-netns-proxy/matagrande.py`,
+`/opt/sightops-netns-provisioner/` — abordagem antiga namespace/SOCKS5, VETADA.
+
+---
+
+## 2026-09-15 — Isolamento por conector via TABELAS DE ROTEAMENTO (NAO namespace/SOCKS5)
+
+Comecando do zero uma abordagem NOVA pro isolamento cross-tenant (dois
+conectores com a mesma faixa privada, ex.: `192.168.10.0/24` em MATA GRANDE e
+PORTO REAL). **O plano antigo `docs/superpowers/plans/2026-09-08-isolamento-rede-por-conector.md`
+(namespace + daemon privilegiado + proxy SOCKS5) esta VETADO pelo usuario**
+("esse proxy eu nao quero nunca mais que voce sugira" — ver memoria
+`feedback_nao_usar_proxy_isolado`). Nao ressuscitar aquele caminho.
+
+**Abordagem escolhida:** policy routing — cada conector ganha a SUA interface
+WireGuard (`wgc<index>`), a SUA tabela de rota (`1000+index`) e um IP de origem
+proprio (`/31` de transito em `10.201.0.0/16`). A API vai selecionar a tabela
+dando **bind no `server_ip` do conector** (`ip rule from <origem> table N`) —
+sem CAP_NET_ADMIN, sem fwmark, sem namespace, sem proxy. Assim o mesmo
+`192.168.10.5` de dois clientes sai por interfaces/tabelas diferentes e nunca
+se cruza.
+
+**Ja feito (codigo novo, PURO/testavel, NADA aplicado em servidor):**
+- `ops/connector_routing/allocator.py` — aloca index->recursos, deterministico,
+  idempotente, index nunca reaproveitado.
+- `ops/connector_routing/state.py` — estado JSON (`/etc/sightops/connector_routing_state.json`),
+  escrita atomica.
+- `ops/connector_routing/system_ops.py` — `build_provision_steps()` PURA (gera os
+  comandos `ip`/`wg`) + `run_steps()` com runner injetavel; chave privada SEMPRE
+  por stdin, nunca no argv; `ip rule` com pref fixa (del+add) pra idempotencia.
+- `ops/connector_routing/provisioner.py` — reconcilia desejado x real: `plan()`
+  PURA (o que falta por conector), `read_current()` le `wg show`/`ip rule`/`ip
+  route` (runner injetavel), `reconcile()` amarra e aplica. `dry_run=True` por
+  padrao. So soma, nunca derruba a `wg-sightops`.
+- `scripts/sightops_connector_routing_test.py` — 16 testes, todos passam
+  (`python scripts/sightops_connector_routing_test.py`).
+- `app/services/connector_routing_bind.py` — helper GATED da API: `bound_session
+  (connector_id)` devolve uma sessao `requests` amarrada no `server_ip` do
+  conector (source_address adapter) SE ele tiver alocacao no estado; senao,
+  sessao normal = comportamento identico ao de hoje (v2 intocado). Le so o JSON
+  do provisionador (`server_ip` ja gravado la), sem importar `ops/`.
+- `scripts/sightops_connector_bind_test.py` — 4 testes, passam.
+- `scripts/sightops_connector_routing_provision.py` — CLI (DRY-RUN por padrao):
+  le os conectores reais (mesmo connectors.json do wg-sync), aloca e mostra o
+  plano por conector (interface/tabela/porta/IP-origem + comandos). `--offline`
+  preview fora do host; `--apply` aplica de verdade (root, le a chave de
+  /etc/wireguard/wg-sightops.conf). `provisioner.connectors_from_store_rows()`
+  (puro, testado) faz a extracao. Total agora: 17 testes no
+  sightops_connector_routing_test.py.
+
+**Falta (proximos passos, nesta ordem):** (5b) WIRING mecanico — trocar
+`requests.get/post` por `bound_session(connector_id).get/post` nos caminhos de
+request a aparelho (nvr.py, dvr.py, camsnapshot/device_info, device_web_proxy,
+recorder_media_service, live_stream/RTSP). E gated, mas MEXE em codigo que o v2
+tb usa -> fazer so quando for ativar o v3, com cuidado, um caminho por vez.
+(6) migracao operacional no v3 — cada roteador de site aponta o WireGuard pra
+PORTA nova dele (`52000+index`), custo inerente (interface propria = porta
+propria; vale pro namespace tb). Depois: wrapper CLI (le conectores do store +
+chave de /etc/wireguard) pra rodar o reconcile no v3, e systemd/timer pra manter.
+
+**Regra de trabalho desta sessao:** parar de mexer na PRODUCAO por ora; isso vai
+pro **v3**. Nao commitado ainda. Foco: v2 intocado.
+
+---
+
 ## 2026-09-05 — Proxy web de camera/DVR/NVR corrigido (e uma regressao de seguranca restaurada)
 
 Usuario reclamou do botao "Web" (abrir a interface nativa do equipamento):
@@ -2817,3 +3049,276 @@ no meio do caminho: o horário provável é **por volta das 13h**.
 4. Se nada aparecer cobrindo o dia inteiro no canal 4, considerar que o
    acidente pode ter sido capturado por OUTRO canal (o usuário só
    confirmou "canal 4", mas vale perguntar de novo se há certeza).
+
+## 2026-09-07 (continuação) — Acidente ACHADO; causa raiz do erro de login; download HTTP confirmado quebrado nesse DVR; capacidades novas do SDK mapeadas
+
+**Agente:** Claude.
+
+### O acidente foi encontrado -- fechamento do teste cego
+
+Horário real: **03/09/2026, canal 4, ~13:30:43-13:30:55** -- um carro branco sai
+da pista bruscamente e para de forma anormal na grama/calçada, ao lado esquerdo
+do quadro. Confirmado pelo usuário como o acidente de verdade. Câmera longe
+demais pra ver o poste sendo atingido, mas a saída brusca da via já é
+suficiente pra confirmar.
+
+**Isso estava DENTRO da janela que a sessão anterior já tinha marcado como
+"Coberto"** (13h15-13h45) e tinha sido **descartado por engano** como falso
+alarme -- o candidato de "13:31" foi checado antes via RTSP mas o frame
+capturado mostrava só a moto que fica permanentemente estacionada no canteiro
+central (aparece em TODO frame dessa câmera), não o carro do acidente, que
+fica do lado oposto do quadro, na grama. Lição de metodologia: checar um
+candidato "capturando 1 frame" é frágil quando há mais de um objeto
+parado/estacionado na cena -- precisa olhar o quadro inteiro, não só a região
+que gerou a detecção.
+
+**Lição de produto, mais importante:** classificação YOLO ("isto é um carro")
+não é o sinal certo pra achar acidente. O sinal real é **comportamento
+anômalo** -- um objeto que sai da trajetória esperada (via) e para de forma
+anormal -- não a classe do objeto. Um scanner baseado só em
+"achou classe X com confiança Y" (como o `netsdk_scan_test.py` de hoje) nunca
+teria sinalizado isso como destaque entre ~2900 detecções de "carro" normais
+de tráfego. Pra virar feature de verdade, precisa de rastreamento de posição
+entre frames (a mesma caixa parada/fora da via por N segundos), não só
+classificação frame a frame.
+
+### Causa raiz do erro de login (código 3) resolvida -- era o ambiente local, não o DVR
+
+A tarde inteira de hoje, login via NetSDK (`CLIENT_LoginEx2`) falhava com
+código de erro 3 em **3 DVRs diferentes** (Easy Tecnologias, um segundo DVR
+de teste, e o RADS -- que tinha funcionado horas antes na mesma sessão).
+Reboot do DVR da Easy Tecnologias não resolveu. Reduzir de 7 para 2 túneis
+SSH simultâneos não resolveu.
+
+**Testando login direto do servidor central (`central@10.10.12.7` /
+`201.182.184.84`), sem nenhum túnel nem WSL, login funcionou de primeira nos
+3 DVRs.** Causa confirmada: algo na rota
+`Windows -> WSL2 -> túnel SSH local -> servidor central -> DVR` -- HTTP e
+RTSP passavam bem por ali, só o protocolo binário do NetSDK sofria. Não
+investigado a fundo qual componente exato (múltiplos túneis `plink`
+simultâneos, ou peculiaridade do NAT do WSL2) -- mas **rodar direto do
+servidor central resolve**, e é isso que deve ser usado daqui pra frente
+pra qualquer teste ao vivo de NetSDK, não o WSL local.
+
+### Download HTTP (RPC_Loadfile) confirmado quebrado de verdade nesse DVR -- não era o túnel
+
+Testado também direto do servidor central (sem túnel): o MESMO erro
+`IncompleteRead(0 bytes lidos, ~773MB esperados)` do problema #3 já
+documentado. Ou seja, ao contrário do login, **este bug é real, do lado do
+DVR/rede da Easy Tecnologias**, não do ambiente local.
+
+Detalhe novo: o `Content-Length` esperado pro pedido de só 1 minuto de
+gravação foi **~773MB** -- o índice do DVR (`mediaFileFind.cgi`) parece
+devolver o arquivo de gravação inteiro (várias horas), e o código
+(`_rpc_loadfile_fallback` em `recorder_media_service.py`) baixa o arquivo
+inteiro antes de cortar com ffmpeg. Um arquivo desse tamanho, numa rede que
+já mostrou portas fechadas/não-padrão (37777 fechada, HTTP em 8081 em vez de
+80), provavelmente esbarra num firewall/proxy do lado do cliente que corta
+transferências HTTP grandes. Não testado: pedir com `Range` HTTP pra baixar
+só uma fatia, em vez do arquivo inteiro.
+
+**Enquanto isso não for resolvido, não dá pra mandar clipe desse DVR pro
+Gemini via este caminho.** Alternativa não testada ainda: gravar o MP4 a
+partir do próprio playback acelerado do NetSDK (que já funciona), fazendo o
+ffmpeg do pipeline atual escrever um arquivo `.mp4` além de (ou em vez de)
+alimentar o YOLO -- evita depender do `RPC_Loadfile` por completo.
+
+### Ambiente de trabalho isolado montado no servidor central
+
+Pra rodar os testes acima com segurança (ver próxima seção sobre carga),
+montado em `/home/central/netsdk_diag/` no servidor central:
+- `scripts/` -- copia de `netsdk_bridge.py`, `netsdk_bridge_login_test.py`,
+  `netsdk_scan_test.py`.
+- `lib/` e `~/netsdk/lib/` -- as 7 `.so` do SDK (~64MB).
+- `venv/` -- venv Python isolado (nao mexe no Python do sistema) com
+  `torch` CPU-only, `ultralytics --no-deps`, `opencv-python-headless`,
+  `numpy`, `requests`, etc.
+- `app/core/paths.py`, `app/services/recorder_media_service.py` e um
+  **stub minimo** de `app/services/nvr_ai_service.py` (só
+  `dahua_media_find_segments` + helpers, sem `tenant_context`/`db_store`)
+  -- usados só pra testar o download HTTP isolado, fora do container de
+  produção.
+
+**Cuidado se for reusar:** o servidor central tem só 4 vCPUs e já roda 25
+containers de produção (os 2 stacks do SightOps, Zabbix, Evolution
+API/WhatsApp, Postgres x2, Grafana). Rodar a varredura (decode+YOLO) subiu o
+load average de ~2,4 para **14,74** -- alto, mas majoritariamente em
+processos `nice -19` (o scheduler do Linux cede CPU pra produção quando
+necessário). Nenhum container caiu de "healthy" nos testes de hoje, mas
+**não abusar**: rodar sempre com `nice -n 19`, sequencial (nunca paralelo),
+e monitorar `uptime`/`docker ps` durante a execução. `taskset` pra restringir
+a 1 core **quebra** a abertura de sessão do NetSDK (`CLIENT_PlayBackByTimeEx2`
+falha) -- não usar.
+
+### Duas correções feitas no código (`scripts/netsdk_bridge.py` e `netsdk_scan_test.py`)
+
+- `netsdk_bridge.py`: nova função `consultar_intervalo_gravacao` via
+  `CLIENT_GetStorageBoundTimeEx` -- devolve o intervalo real de gravação
+  por DISCO (não por canal). Ainda **não testada contra um DVR real**
+  (assume `nDiskCount=0` = "todos os discos", convenção comum do SDK Dahua
+  mas não confirmada aqui).
+- `netsdk_scan_test.py`: achados agora gravam o horário real estimado
+  (`horario`), não só o número do frame -- calculado a partir do `fps=2`
+  do filtro ffmpeg (aproximação: assume que a decimação segue o tempo
+  real do stream original, não o tempo de parede da varredura; pode
+  divergir se a câmera não marcar frame rate correto no stream).
+
+### Confirmado ao vivo hoje (janelas que faltavam do dia 03/09)
+
+Rodadas direto do servidor central, canal 4, DVR Easy Tecnologias:
+- `13:01:00-13:15:00`: 1673 frames, 204s de parede, 4,1x real, 1501
+  achados brutos (perdido só o primeiro minuto, mesmo bug de borda de
+  segmento -- pedir `13:00:05` ainda cortou aos ~10s de dado real,
+  hipótese do handoff anterior de "poucos segundos de margem bastam" **não
+  se confirmou**; só `13:01:00` (1 min de margem) funcionou).
+- `13:45:00-14:00:00`: 1799 frames, 217s de parede, 4,1x real, 1400
+  achados brutos.
+
+Com isso o dia 03/09 fica coberto quase por inteiro (falta só
+`13:00:00-13:01:00`), mas como o acidente real caiu dentro de
+`13h15-13h45` (já coberto antes), a cobertura de hoje não foi o que achou
+o acidente -- foi o vídeo que o usuário mandou direto.
+
+## 2026-09-07 (continuação) — Testes de limite de VLM (Qwen3-VL-32B) e início do LPR
+
+**Agente:** Claude.
+
+### Testes de capacidade do Qwen3-VL-32B (GPU alugada, RunPod RTX 3090)
+
+Testado contra 5 clipes reais diferentes, sempre verificando a "verdade" eu
+mesmo antes de perguntar ao modelo (teste cego de verdade, não só teórico):
+
+1. **Acidente real (video.mp4 e video2.mp4, dois ângulos)**: falhou 4x --
+   nunca percebeu o carro saindo da via/parando de forma anormal, mesmo com
+   os frames certos disponíveis (confirmado inspecionando `video_grid_thw`
+   -- o modelo recebe cobertura completa do clipe, o problema não é
+   amostragem perdida). Narrou a cena como "trânsito normal, sem
+   incidentes" nas 4 vezes.
+2. **Contagem de pessoas numa piscina** (clipe recortado, só adultos --
+   ver nota de privacidade abaixo): **acertou** -- 7 pessoas, contei eu
+   mesmo depois e bateu, inclusive diferenciou corretamente quem estava
+   dentro/fora da água.
+3. **Marca/modelo/cor de carro**: acertou marca (Volkswagen) e cor
+   (branco), mas **errou a categoria do veículo** -- disse "SUV Tiguan"
+   pra um hatch compacto pequeno (tipo Gol/Voyage), com detalhes
+   inventados ("faróis estreitos, geração 2016+") that soam precisos mas
+   são alucinação.
+4. **Cena vazia de controle** (rua sem ninguém, verdade = "nada"):
+   **acertou** -- "0 veículos, nenhum evento", sem alucinar presença.
+
+**Conclusão sobre os limites**: o modelo não está quebrado nem
+alucinando aleatoriamente -- ele acerta bem percepção espacial direta
+(contar, descrever objeto presente, confirmar ausência). O que falha
+consistentemente é **julgar se um comportamento é anômalo ao longo do
+tempo** (isso é acidente? isso é normal?) e **detalhe fino demais**
+(modelo exato do carro) -- nesses dois casos ele responde com a mesma
+confiança de quando acerta, sem sinalizar incerteza. Pra um produto real,
+isso significa: bom pra contagem/presença, não confiável sozinho pra
+"isso é um evento anômalo" sem um segundo sinal (o rastreador de
+movimento) confirmando.
+
+**Nota de privacidade, erro cometido e corrigido**: tentei sanitizar um
+clipe de piscina com crianças recortando geometricamente a área da
+banheira. O recorte não cobriu uma criança que caminhava numa parte da
+cena que eu não tinha conferido frame a frame -- ela apareceu na resposta
+do modelo antes de eu perceber. Arquivo apagado do servidor remoto assim
+que percebido. Lição: sanitização de vídeo com pessoas precisa conferir
+VÁRIOS frames espalhados pelo clipe inteiro antes de mandar pra qualquer
+lugar externo, nunca só 1 frame -- e qualquer criança em qualquer frame
+é bloqueio total, não recorte parcial.
+
+**Recusas deliberadas, não técnicas**: o usuário pediu pra classificar
+gênero e cor de pele das pessoas da piscina (mesmo em formato "por
+porcentagem/probabilidade"). Recusei -- não é limitação de ferramenta,
+é julgamento: perfilar característica sensível (LGPD Art. 5º, II) de
+pessoas reais identificáveis, sem consentimento, não é algo que devo
+fazer nem testar. Contagem agregada por faixa etária (sem gênero/raça)
+foi feita a pedido do usuário como alternativa.
+
+### LPR (leitura de placa) — início: zoom motorizado remoto resolvido
+
+Objetivo novo do usuário: usar câmeras com zoom motorizado (Intelbras
+VIP-3240-Z-G2, 10.10.8.1 e 10.10.8.2, site "Perucaba") pra LPR -- dar
+zoom numa placa detectada e ler com OCR especializado (não com o VLM
+grande -- caro, lento, e no teste de marca/modelo já vimos que ele
+alucina detalhe fino).
+
+**Achado importante -- a API CGI pública documentada NÃO funciona nessa
+família de firmware.** Testei `devVideoInput.cgi?action=adjustFocus`
+exatamente como documentado em `HTTP_API_V3_59_Intelbras.pdf` (o usuário
+tinha o PDF salvo em `OneDrive\Área de Trabalho\API Intelbras\`) --
+sempre `400 Bad Request`, mesmo depois de **atualizar o firmware** da
+câmera (2020-10-28 → 2021-07-07, autorizado e feito pelo usuário; câmera
+voltou saudável, mas o changelog oficial não mencionava nada de
+zoom/foco, e de fato não mudou nada).
+
+**A causa real: a interface web usa um protocolo JSON-RPC diferente e
+não documentado publicamente (`/RPC2` e `/RPC2_Login`), com sessão.**
+Descoberto inspecionando a aba Rede do Chrome (DevTools) enquanto o
+usuário mexia no controle de zoom pela tela -- a primeira tentativa de
+capturar via CDP direto (`Network.enable` num script Python plugado na
+aba certa via `/json/list`) só pegava `global.keepAlive`; só funcionou
+quando o usuário, além de arrastar o slider, clicava no botão
+**"Atualizar"** da tela (o slider sozinho não dispara a chamada).
+
+Fluxo completo, implementado e testado ao vivo (zoom real mudou visivelmente
+antes/depois, confirmado por snapshot):
+1. `POST /RPC2_Login` `global.login` (sem senha) → challenge (`realm`,
+   `random`).
+2. Hash: `pass1 = MD5(usuario:realm:senha)`, depois
+   `pass_hash = MD5(usuario:random:pass1)` (maiúsculo).
+3. `POST /RPC2_Login` `global.login` de novo com `pass_hash` → `session`.
+4. `POST /RPC2` `devVideoInput.factory.instance` `{channel:0}` → `object`
+   (int, ex.: `2`).
+5. `POST /RPC2` `devVideoInput.adjustFocus` `{focus, zoom}` -- **valores
+   ABSOLUTOS 0.0-1.0, não incremento** (a doc do CGI antigo, que não
+   funciona mesmo, documentava como delta -- não confundir os dois).
+
+**Armadilha:** a sessão é vinculada a quem fez login (provavelmente por
+IP) -- tentar reusar a sessão aberta no navegador do usuário a partir do
+servidor central deu `"Invalid session in request data!"`. Cada cliente
+precisa fazer seu próprio login.
+
+Implementado em `scripts/intelbras_zoom_rpc.py` (classe `CameraZoomRPC`),
+testado ao vivo contra `10.10.8.1` via túnel SSH.
+
+**Ainda não feito**: detecção automática de carro/placa na cena larga
+pra decidir quando/pra onde dar zoom, e o OCR de placa em si (modelo
+especializado, não o VLM grande).
+
+### OCR de placa -- container em produção (10.10.12.7), testado e no ar
+
+Biblioteca escolhida: **fast-alpr** (`ankandrew/fast-alpr`, ONNX --
+detector YOLO-v9-tiny + OCR `cct-s-v1-global`, ~15MB de modelos no
+total, CPU-only). Descartei o VLM grande pra essa tarefa de propósito --
+já provamos hoje que ele alucina detalhe fino (marca/modelo de carro).
+
+Serviço em `services/lpr_ocr/` (`app.py` FastAPI + `Dockerfile` +
+`requirements.txt`), endpoint `POST /ler-placa` (recebe imagem, devolve
+texto da placa + confiança por caractere + caixa da detecção).
+
+**Rodando em produção real** (não em teste/GPU alugada) --
+`docker run --name sightops-lpr-ocr --restart unless-stopped --memory=512m
+-p 18600:8600`. Medido: **142MB de RAM em uso** (de um limite de 512MB
+setado de propósito), CPU ~0% em repouso, servidor com só 7,6GB de RAM
+total e outros 25 containers -- confirma que OCR de placa (imagem única,
+não vídeo contínuo) é ordens de grandeza mais leve que os VLMs testados
+mais cedo, e cabe nesse hardware sem risco. Nenhum outro container
+ficou `unhealthy` depois do deploy.
+
+Testado de ponta a ponta com a imagem de exemplo do próprio repositório
+da lib (`assets/test_image.png`) -- achou a placa e leu
+**"5AU5341" com confiança 1.0 em cada caractere**. Ainda não testado
+contra uma placa capturada ao vivo pelas câmeras de Perucaba (nenhum
+carro passou durante a sessão com o zoom já automatizado).
+
+**Pendências pra fechar o fluxo completo**:
+1. Detecção de "tem carro entrando" na visão larga da câmera (yolo nano
+   já usado hoje, classe `carro`/`moto`, ou o próprio detector de placa
+   do fast-alpr pode servir de gatilho direto).
+2. Decidir a sequência de zoom (`CameraZoomRPC.ajustar`) que aponta pra
+   onde a placa deve aparecer, e o tempo de espera pro motor assentar
+   antes do snapshot (visto no teste: status fica `"Autofocus"` por um
+   tempo depois de mover, não é instantâneo).
+3. Conectar o resultado do OCR num evento/registro do SightOps (hoje o
+   serviço só devolve o texto, não grava nada).

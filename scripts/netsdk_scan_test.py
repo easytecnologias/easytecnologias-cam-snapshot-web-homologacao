@@ -13,7 +13,7 @@ import subprocess
 import sys
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import numpy as np
 from ultralytics import YOLO
@@ -23,6 +23,7 @@ from scripts import netsdk_bridge
 
 LARGURA, ALTURA = 640, 360
 TAMANHO_FRAME = LARGURA * ALTURA * 3  # bgr24
+FPS_SAIDA = 2  # bate com o "fps=2" do filtro do ffmpeg abaixo
 
 CLASSES_INTERESSE = {0: "pessoa", 2: "carro", 3: "moto", 5: "onibus", 7: "caminhao"}
 LIMIAR_CONFIANCA = 0.4
@@ -44,7 +45,7 @@ ffmpeg_proc = subprocess.Popen(
         "ffmpeg", "-loglevel", "error",
         "-i", "pipe:0",
         "-f", "rawvideo", "-pix_fmt", "bgr24",
-        "-vf", f"fps=2,scale={LARGURA}:{ALTURA}",
+        "-vf", f"fps={FPS_SAIDA},scale={LARGURA}:{ALTURA}",
         "pipe:1",
     ],
     stdin=subprocess.PIPE,
@@ -62,6 +63,12 @@ def ler_frames():
                 break
             continue
         estado["frames_lidos"] += 1
+        # Aproximacao: assume que o "fps=2" do ffmpeg decima uniformemente
+        # em cima do tempo real do stream original (PTS do H.264/H.265),
+        # nao do tempo de parede da varredura -- vale enquanto a camera
+        # marca frame rate correto no stream. Nao tratar como exato ao
+        # segundo sem conferir contra o instante real (ex.: RTSP direto).
+        horario_real = tempo_inicio_janela + timedelta(seconds=(estado["frames_lidos"] - 1) / FPS_SAIDA)
         img = np.frombuffer(buf, dtype=np.uint8).reshape((ALTURA, LARGURA, 3))
         resultado = modelo.predict(img, verbose=False)[0]
         for box in resultado.boxes:
@@ -70,10 +77,11 @@ def ler_frames():
             if classe_id in CLASSES_INTERESSE and confianca >= LIMIAR_CONFIANCA:
                 achados.append({
                     "frame_num": estado["frames_lidos"],
+                    "horario": horario_real.strftime("%Y-%m-%d %H:%M:%S"),
                     "classe": CLASSES_INTERESSE[classe_id],
                     "confianca": round(confianca, 2),
                 })
-                print(f"  achado: frame {estado['frames_lidos']} -> {CLASSES_INTERESSE[classe_id]} ({confianca:.2f})")
+                print(f"  achado: {horario_real:%H:%M:%S} (frame {estado['frames_lidos']}) -> {CLASSES_INTERESSE[classe_id]} ({confianca:.2f})")
         if estado["frames_lidos"] % 50 == 0:
             print(f"  {estado['frames_lidos']} frames processados")
 
