@@ -27,7 +27,7 @@ if (!WS) {
 const CONTROL_HOST = '127.0.0.1';
 const CONTROL_PORT = 47600;           // porta fixa que o frontend procura
 const IDLE_MS = 10 * 60 * 1000;       // fecha o forward apos 10 min ocioso
-const VERSION = '1.0.0';
+const VERSION = '1.1.0';
 
 // forwards ativos: chave "wsbase|ip|port" -> { server, localPort, lastUsed, key }
 const forwards = new Map();
@@ -52,20 +52,29 @@ function ensureForward(wsbase, ip, port, token) {
       try { ws = new WS(url); } catch (e) { sock.destroy(); return; }
       ws.binaryType = 'arraybuffer';
       const pending = [];
-      let open = false;
+      let open = false, bytesFromDev = 0;
+      log(`conexao nova -> abrindo tunel WS pra ${ip}:${port}`);
       ws.onopen = () => {
         open = true;
+        log(`tunel WS CONECTADO -> ${ip}:${port}`);
         for (const chunk of pending) ws.send(chunk);
         pending.length = 0;
       };
       ws.onmessage = (ev) => {
         try {
           const buf = Buffer.from(ev.data instanceof ArrayBuffer ? ev.data : ev.data);
+          bytesFromDev += buf.length;
           sock.write(buf);
         } catch (_) {}
       };
-      ws.onclose = () => { try { sock.end(); } catch (_) {} };
-      ws.onerror = () => { try { sock.destroy(); } catch (_) {} };
+      ws.onclose = (ev) => {
+        log(`tunel WS fechado (code=${ev && ev.code}) apos ${bytesFromDev} bytes do dispositivo`);
+        try { sock.end(); } catch (_) {}
+      };
+      ws.onerror = (ev) => {
+        log(`tunel WS ERRO: ${(ev && (ev.message || ev.error && ev.error.message)) || 'ver code no fechamento'}`);
+        try { sock.destroy(); } catch (_) {}
+      };
       sock.on('data', (data) => {
         if (entry) entry.lastUsed = Date.now();
         if (open) { try { ws.send(data); } catch (_) {} }
