@@ -659,7 +659,17 @@ async def ws_web_tunnel(ws: WebSocket, ip: str) -> None:
         if not _is_proxy_allowed_host(host) or not _ip_belongs_to_current_tenant(host):
             await ws.close(code=4403)
             return
-        reach = _reach(host)  # conector isolado -> IP virtual
+        # GRAVADOR nao vive no inventario de cameras, e o _reach so resolve o
+        # conector por la -- sem este hint ele devolveria o IP real e o
+        # container nao alcanca a LAN do conector isolado (camera abria, NVR
+        # dava ERR_EMPTY_RESPONSE). Cai pro inventario de gravadores.
+        rec_cid = ""
+        try:
+            from app.api.endpoints.nvr import _recorder_connector_for_host
+            rec_cid = _recorder_connector_for_host(host)
+        except Exception:
+            rec_cid = ""
+        reach = _reach(host, rec_cid)  # conector isolado -> IP virtual
         try:
             reader, writer = await asyncio.wait_for(
                 asyncio.open_connection(reach, port), timeout=10.0
