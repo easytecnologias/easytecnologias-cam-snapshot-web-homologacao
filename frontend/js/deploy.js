@@ -1047,19 +1047,17 @@ function deployStandaloneRecorderRenderSaved() {
     select.disabled = true;
     return;
   }
-  if (!selectedOltId || !selectedSite) {
-    select.innerHTML = '<option value="">Escolha uma OLT cadastrada</option>';
-    select.disabled = true;
-    return;
-  }
+  // Sem OLT ("Sem OLT vinculada") a lista NAO trava: nem todo gravador entra
+  // por OLT. Sem site pra filtrar, mostra os do conector inteiro, agrupados
+  // por site. Com OLT escolhida, mantem o filtro pelo site dela.
   const items = _deployStandaloneRecorderSavedItems.filter(item => {
-    const sameSite = String(item.site || '').trim().toLowerCase() === selectedSite.toLowerCase();
-    if (!sameSite) return false;
+    if (selectedSite && String(item.site || '').trim().toLowerCase() !== selectedSite.toLowerCase()) return false;
     if (selectedConnectorId && item.connectorId) return String(item.connectorId) === String(selectedConnectorId);
     return true;
   });
   if (!items.length) {
-    select.innerHTML = `<option value="">Nenhum gravador cadastrado em ${esc(selectedSite)}</option>`;
+    const onde = selectedSite ? `em ${esc(selectedSite)}` : 'neste conector';
+    select.innerHTML = `<option value="">Nenhum gravador cadastrado ${onde}</option>`;
     select.disabled = true;
     return;
   }
