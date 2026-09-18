@@ -2538,7 +2538,7 @@ async function camAction(action) {
     return;
   }
   if (action === 'web') {
-    window.open(`${API_BASE}/api/maintenance/web/${encodeURIComponent(cam.ip)}/`, '_blank', 'noopener');
+    openDeviceWeb(cam.ip, cam.http_port || cam.port || 80);
     return;
   }
 

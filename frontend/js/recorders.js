@@ -995,7 +995,7 @@ async function runRecAction() {
 
 function recPanelAction(action) {
   if (!_recActive) return;
-  if (action === 'web') { window.open(`${API_BASE}/api/maintenance/web/${encodeURIComponent(_recActive.host)}/`, '_blank'); return; }
+  if (action === 'web') { openDeviceWeb(_recActive.host, _recActive.http_port || 80); return; }
   if (action === 'ping') { openPingTerminal(_recActive.camera_ip || _recActive.host, _recActive.remote_connector_id || _recActive.connector_id || ''); return; }
   openRecAction(action);
 }

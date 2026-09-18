@@ -8,6 +8,36 @@ window.lucide = window.lucide || { createIcons() {} };
 //  Estado global
 let _token = null;
 let _currentView = 'dashboard';
+
+// Abre a UI web de um dispositivo (camera/NVR). Se o SightOps Agent estiver
+// rodando no PC (127.0.0.1:47600), abre DIRETO pelo tunel (transparente, sem
+// reconstrucao). Senao, cai no proxy antigo -- sem regressao. localhost e
+// contexto seguro, entao o fetch http a partir do https e permitido.
+const SIGHTOPS_AGENT_URL = 'http://127.0.0.1:47600';
+async function openDeviceWeb(ip, port) {
+  ip = String(ip || '').trim();
+  if (!ip) return;
+  const proxyUrl = `${API_BASE}/api/maintenance/web/${encodeURIComponent(ip)}/`;
+  let health = null;
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 1200);
+    const r = await fetch(`${SIGHTOPS_AGENT_URL}/health`, { signal: ctrl.signal });
+    clearTimeout(t);
+    health = r.ok ? await r.json() : null;
+  } catch (_) { health = null; }
+  if (health && health.ok) {
+    try {
+      const wsbase = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host;
+      const q = `wsbase=${encodeURIComponent(wsbase)}&ip=${encodeURIComponent(ip)}`
+        + `&port=${encodeURIComponent(port || 80)}&token=${encodeURIComponent(_token || '')}`;
+      const res = await fetch(`${SIGHTOPS_AGENT_URL}/open?${q}`);
+      const data = await res.json();
+      if (data && data.ok && data.url) { window.open(data.url, '_blank', 'noopener'); return; }
+    } catch (_) { /* cai no proxy */ }
+  }
+  window.open(proxyUrl, '_blank', 'noopener');
+}
 let _scanWs = null;
 let _camAuthAction = null;
 let _currentUser = null; // ultimo /api/auth/me: role, is_platform_admin, acting_as, enabled_modules...
