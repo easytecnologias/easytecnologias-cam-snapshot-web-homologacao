@@ -5,7 +5,7 @@
  * Roda no PC do usuario. O navegador (frontend do SightOps) fala com ele em
  * http://127.0.0.1:47600 e pede pra abrir um dispositivo; o agente sobe uma
  * porta local (127.0.0.1:porta_aleatoria) e canaliza cada conexao TCP por um
- * WebSocket seguro ate a ponte do app (/api/ws/web-tunnel/<ip>), que alcanca o
+ * WebSocket seguro ate a ponte do app (/ws/web-tunnel/<ip>), que alcanca o
  * dispositivo pelo IP virtual do conector. Assim a UI abre DIRETA, sem
  * reconstrucao de HTML e sem porta publica exposta.
  *
@@ -46,7 +46,7 @@ function ensureForward(wsbase, ip, port, token) {
     const server = net.createServer((sock) => {
       const entry = forwards.get(key);
       if (entry) entry.lastUsed = Date.now();
-      const url = `${wsbase}/api/ws/web-tunnel/${encodeURIComponent(ip)}`
+      const url = `${wsbase}/ws/web-tunnel/${encodeURIComponent(ip)}`
         + `?token=${encodeURIComponent(token)}&port=${encodeURIComponent(port)}`;
       let ws;
       try { ws = new WS(url); } catch (e) { sock.destroy(); return; }
