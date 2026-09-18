@@ -18,24 +18,34 @@ async function openDeviceWeb(ip, port) {
   ip = String(ip || '').trim();
   if (!ip) return;
   const proxyUrl = `${API_BASE}/api/maintenance/web/${encodeURIComponent(ip)}/`;
-  let health = null;
+  let health = null, openData = null, diagErr = '';
   try {
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), 2500);
     const r = await fetch(`${SIGHTOPS_AGENT_URL}/health`, { signal: ctrl.signal });
     clearTimeout(t);
     health = r.ok ? await r.json() : null;
-  } catch (_) { health = null; }
+  } catch (e) { diagErr = 'health:' + ((e && e.message) || String(e)); }
   if (health && health.ok) {
     try {
+      // O cookie de sessao e httponly (JS nao le); pega um token curto pro agente.
+      let token = _token || '';
+      if (!token) {
+        const tr = await apiJson('/api/auth/agent-token', { cacheTtl: 0, forceRefresh: true }).catch(() => null);
+        token = (tr && tr.token) || '';
+      }
       const wsbase = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host;
       const q = `wsbase=${encodeURIComponent(wsbase)}&ip=${encodeURIComponent(ip)}`
-        + `&port=${encodeURIComponent(port || 80)}&token=${encodeURIComponent(_token || '')}`;
+        + `&port=${encodeURIComponent(port || 80)}&token=${encodeURIComponent(token)}`;
       const res = await fetch(`${SIGHTOPS_AGENT_URL}/open?${q}`);
-      const data = await res.json();
-      if (data && data.ok && data.url) { window.open(data.url, '_blank', 'noopener'); return; }
-    } catch (_) { /* cai no proxy */ }
+      openData = await res.json();
+      if (openData && openData.ok && openData.url) {
+        const w = window.open(openData.url, '_blank', 'noopener');
+        if (!w) { diagErr = 'popup bloqueado'; } else { return; }
+      } else if (openData) { diagErr = 'open:' + (openData.error || 'sem url'); }
+    } catch (e) { diagErr = 'open:' + ((e && e.message) || String(e)); }
   }
+  console.warn('[SightOps Agent] DIAG health=', JSON.stringify(health), '| open=', JSON.stringify(openData), '| erro=', diagErr, '-> caindo no proxy');
   window.open(proxyUrl, '_blank', 'noopener');
 }
 let _scanWs = null;

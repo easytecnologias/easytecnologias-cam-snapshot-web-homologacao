@@ -324,6 +324,16 @@ def api_auth_me(user: Dict[str, Any] = Depends(current_user)) -> Dict[str, Any]:
     }
 
 
+@router.get("/agent-token")
+def api_auth_agent_token(user: Dict[str, Any] = Depends(current_user)) -> Dict[str, Any]:
+    """Emite um token bearer curto pro SightOps Agent autenticar a ponte
+    /ws/web-tunnel. O cookie de sessao (httponly) prova quem e; o agente e um
+    processo separado no PC (sem cookie), entao recebe este token na query e
+    conecta o WebSocket. Vida curta e escopo do proprio usuario."""
+    tok = create_access_token(user, label="agent-web", ttl_hours=8)
+    return {"ok": True, "token": str(tok.get("access_token") or tok.get("token") or "")}
+
+
 @router.post("/act-as")
 def api_auth_act_as(
     req: ActAsRequest,
