@@ -63,6 +63,12 @@ def _abre_shell_vsol(host: str, user: str, password: str, port: int = 22, timeou
     """
     import paramiko
 
+    try:  # conector isolado -> IP virtual (vnat); real intacto se nao mapeado
+        from app.services import connector_routing_vnat as _vnat
+        host = _vnat.reach_olt_ip(host) or host
+    except Exception:
+        pass
+
     try:
         cliente = paramiko.SSHClient()
         cliente.set_missing_host_key_policy(paramiko.AutoAddPolicy())

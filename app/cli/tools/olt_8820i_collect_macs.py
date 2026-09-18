@@ -202,10 +202,15 @@ def collect_onu_telemetry_8820i(
     timeout: float = 12.0,
 ) -> List[Dict]:
     """Coleta status e sinal de todas as ONUs sem executar a coleta pesada de MACs."""
+    try:  # conector isolado -> IP virtual (vnat) so na conexao; olt_ip fica real
+        from app.services import connector_routing_vnat as _vnat
+        _conn_host = _vnat.reach_olt_ip(olt_ip) or olt_ip
+    except Exception:
+        _conn_host = olt_ip
     client = paramiko.SSHClient()
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     client.connect(
-        olt_ip,
+        _conn_host,
         username=user,
         password=password,
         look_for_keys=False,
@@ -340,10 +345,15 @@ def get_macs_for_onu(chan, pon: int, onu_id: int) -> List[Dict]:
 
 
 def _open_connection(olt_ip: str, user: str, password: str, timeout: float) -> paramiko.SSHClient:
+    try:  # conector isolado -> IP virtual (vnat) so na conexao
+        from app.services import connector_routing_vnat as _vnat
+        _conn_host = _vnat.reach_olt_ip(olt_ip) or olt_ip
+    except Exception:
+        _conn_host = olt_ip
     client = paramiko.SSHClient()
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     client.connect(
-        olt_ip,
+        _conn_host,
         username=user,
         password=password,
         look_for_keys=False,

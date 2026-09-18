@@ -25,6 +25,7 @@ from app.models.requests import (
     OltRebootOnuRequest,
 )
 from app.cli.tools.olt_8820i_collect_macs import collect_macs_8820i, collect_onu_telemetry_8820i
+from app.services import connector_routing_vnat as _vnat
 from app.services.camera_allowlist import is_allowed as allowlist_is_allowed
 from app.services.olt_ignore_list import is_ignored_olt_row
 from app.services.onu_action_log import log_onu_action
@@ -82,6 +83,7 @@ def _discover_vsol_por_pon(req: Any) -> Dict[str, Any]:
     de conexao) esperam um mapa por PON com a chave `discovered`, como a 8820i
     entrega. Sem adaptar, a tela mostraria zero mesmo com a OLT respondendo.
     """
+    _arm_olt_reach(req)
     bruto = discover_onus_vsol(
         olt_ip=req.olt_ip, user=req.user, password=req.password, pon=req.pon,
     )
@@ -279,6 +281,16 @@ def _sync_camera_inventory_from_olt_rows(
 
 def _req_connector_id(req: Any) -> str:
     return _norm_text(getattr(req, "remote_connector_id", "") or getattr(req, "connector_id", ""))
+
+
+def _arm_olt_reach(req: Any) -> None:
+    """Marca o conector desta operacao OLT pro vnat: os drivers virtualizam o IP
+    da OLT so na conexao SSH (conector isolado -> IP virtual). Chamar no inicio de
+    toda operacao; sem conector (coleta local) marca vazio e o IP fica real."""
+    try:
+        _vnat.set_olt_reach_connector(_req_connector_id(req))
+    except Exception:
+        pass
 
 
 def _req_connector_name(req: Any) -> str:
@@ -659,6 +671,7 @@ def _sync_onu_signal_inventory(req: OltOnuSignalRequest, result: dict[str, Any])
 
 def collect_macs(req: OltCollectMacsRequest) -> Dict[str, Any]:
     """Coleta MACs/CPEs na OLT Intelbras (8820i/4840e) e escreve olt-cpe-macs.json (compat legado)."""
+    _arm_olt_reach(req)
     require_olt_capability(req, "collect_macs", "sincronizar inventario")
     connector = _validate_olt_network_context(req)
     connector_id = str(getattr(req, "remote_connector_id", None) or getattr(req, "connector_id", None) or "").strip()
@@ -837,6 +850,7 @@ def collect_macs(req: OltCollectMacsRequest) -> Dict[str, Any]:
 
 def collect_onu_telemetry(req: OltCollectMacsRequest) -> Dict[str, Any]:
     """Atualiza status/sinal das ONUs preservando MACs e demais dados do inventario."""
+    _arm_olt_reach(req)
     require_olt_capability(req, "telemetry", "coletar telemetria")
     connector = _validate_olt_network_context(req)
     model = _norm_text(req.olt_model or "8820i").lower()
@@ -1068,6 +1082,7 @@ def list_macs(site: str = "") -> Dict[str, Any]:
 
 def discover_onus(req: OltDiscoverOnusRequest) -> Dict[str, Any]:
     """Descobre ONUs nao autorizadas ou lista ocupacao por driver homologado."""
+    _arm_olt_reach(req)
     require_olt_capability(req, "discover_onus", "descobrir ONUs")
     _validate_olt_target_connector(req)
     with perf_step("OLT_discover_onus"):
@@ -1123,6 +1138,7 @@ def _vlan_summary_from_macs(macs: Any) -> str:
 def add_onu(req: OltAddOnuRequest) -> Dict[str, Any]:
     """Autoriza uma ONU descoberta (serno_id) na OLT Intelbras 8820i, com
     servico/VLAN opcional. Equipamento vivo -- ver aviso na UI de Implantacao."""
+    _arm_olt_reach(req)
     require_olt_capability(req, "add_onu", "autorizar ONU")
     profile = (req.profile or "").strip() or profile_for_model(req.onu_model, req.terminal)
     services = [{"service": e.service, "vlan": e.vlan} for e in req.services] if req.services else None
@@ -1205,6 +1221,7 @@ def add_onu_bridge(req: OltAddOnuBridgeRequest) -> Dict[str, Any]:
     `add_onu` autorizou a ONU mas o `bridge add` falhou (tipo de bridge
     errado pra VLAN, ou a ONU ainda nao tinha assentado) -- antes disso so
     dava pra corrigir entrando na OLT direto. Equipamento vivo."""
+    _arm_olt_reach(req)
     require_olt_capability(req, "add_onu", "aplicar servico/VLAN")
     services = [{"service": e.service, "vlan": e.vlan} for e in req.services] if req.services else None
     vlan_summary = _vlan_summary_from_services(req.services, req.vlan)
@@ -1248,6 +1265,7 @@ def add_onu_bridge(req: OltAddOnuBridgeRequest) -> Dict[str, Any]:
 
 def find_onu(req: OltFindOnuRequest) -> Dict[str, Any]:
     """Localiza uma ONU ja autorizada pelo serial (8820i) ou MAC (4840E)."""
+    _arm_olt_reach(req)
     require_olt_capability(req, "find_onu", "localizar ONU")
     with perf_step("OLT_find_onu"):
         try:
@@ -1322,6 +1340,7 @@ def _clear_deleted_onu_from_camera_inventory(req: OltDeleteOnuRequest) -> Dict[s
 
 def delete_onu(req: OltDeleteOnuRequest) -> Dict[str, Any]:
     """Exclui uma ONU ja autorizada (posicao pon/onu) na OLT 8820i ou 4840E."""
+    _arm_olt_reach(req)
     require_olt_capability(req, "delete_onu", "excluir ONU")
     with perf_step("OLT_delete_onu"):
         try:
@@ -1362,6 +1381,7 @@ def delete_onu(req: OltDeleteOnuRequest) -> Dict[str, Any]:
 
 def reboot_onu(req: OltRebootOnuRequest) -> Dict[str, Any]:
     """Reinicia uma ONU/ONT ja autorizada (8820i ou 4840E)."""
+    _arm_olt_reach(req)
     require_olt_capability(req, "reboot_onu", "reiniciar ONU")
     with perf_step("OLT_reboot_onu"):
         try:
@@ -1399,6 +1419,7 @@ def reboot_onu(req: OltRebootOnuRequest) -> Dict[str, Any]:
 
 def onu_signal(req: OltOnuSignalRequest) -> Dict[str, Any]:
     """Consulta sinal e MACs de uma ONU ja autorizada (8820i ou 4840E)."""
+    _arm_olt_reach(req)
     require_olt_capability(req, "onu_signal", "consultar sinal/MACs")
     with perf_step("OLT_onu_signal"):
         try:

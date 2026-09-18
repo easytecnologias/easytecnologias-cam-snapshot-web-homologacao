@@ -146,6 +146,11 @@ def _cli(chan, cmd: str, timeout: float = 12.0) -> str:
     return _read(chan, timeout=timeout)
 
 def _open_shell(host: str, user: str, password: str, port: int = 22, timeout: float = 12.0):
+    try:  # conector isolado -> IP virtual (vnat); real intacto se nao mapeado
+        from app.services import connector_routing_vnat as _vnat
+        host = _vnat.reach_olt_ip(host) or host
+    except Exception:
+        pass
     if port == 22 and not _paramiko_supports_legacy_4840e():
         try:
             return _sshpass_legacy_shell(host, user, password, port=port, timeout=timeout)

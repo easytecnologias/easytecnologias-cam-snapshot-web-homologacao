@@ -17,6 +17,7 @@ Le so o JSON que o gerador escreve -- nao depende do pacote `ops/` no deploy:
 """
 from __future__ import annotations
 
+import contextvars
 import ipaddress
 import json
 import os
@@ -116,6 +117,32 @@ def real_ip_for(connector_id: Optional[str], virtual_ip: Optional[str]) -> Optio
 def has_mapping(connector_id: Optional[str]) -> bool:
     """True se o conector tem alocacao virtual (ou seja, esta isolado)."""
     return bool(_load_map().get(str(connector_id or "").strip()))
+
+
+# --- Contexto de coleta OLT: o conector "ativo" da operacao em curso ---
+# Os drivers de OLT (app/cli/tools/olt_*) abrem SSH pelo IP que recebem e NAO
+# conhecem o conector. Em vez de propagar connector_id por dezenas de call-sites,
+# o olt_service seta este contextvar no inicio da operacao e o ponto de conexao
+# de cada driver chama reach_olt_ip(host) -- assim SO a conexao vira IP virtual;
+# o IP real continua no que o driver grava no inventario.
+_olt_reach_cid = contextvars.ContextVar("olt_reach_connector", default="")
+
+
+def set_olt_reach_connector(connector_id: Optional[str]) -> None:
+    """Marca o conector da operacao OLT atual (thread/contexto isolado)."""
+    try:
+        _olt_reach_cid.set(str(connector_id or "").strip())
+    except Exception:
+        pass
+
+
+def reach_olt_ip(olt_ip: Optional[str]) -> Optional[str]:
+    """IP a conectar de fato na OLT: virtual (vnat) se o conector do contexto for
+    isolado, senao o real intacto. Idempotente (IP ja virtual volta igual)."""
+    try:
+        return virtual_ip_for(_olt_reach_cid.get(), olt_ip) or olt_ip
+    except Exception:
+        return olt_ip
 
 
 def _virtualize_token(cid: str, token: str) -> str:
