@@ -38,10 +38,18 @@ codigo fonte dele quando precisou (`internal/streams/api.go`):
 """
 from __future__ import annotations
 
+import time
 from typing import Any, Dict, List
 from urllib.parse import quote
 
 import requests
+
+# Streams recem-registrados nao podem ser reapados na hora: o player leva alguns
+# segundos pra virar "consumer" (pior pelo tunel isolado, onde o go2rtc demora
+# mais pra estabelecer o RTSP). Sem essa carencia, a varredura periodica remove
+# o stream ANTES do player conectar -> "mse: stream not found".
+_registered_at: Dict[str, float] = {}
+_REAP_GRACE_SECONDS = 90.0
 
 # Nome do servico go2rtc dentro da rede do docker-compose (ver
 # deploy/go2rtc/go2rtc.yaml e docker-compose*.yml) -- endereco fixo, nao
@@ -111,6 +119,7 @@ def register_stream(*, ip: str, user: str, password: str, subtype: int = 1, vend
     """
     st = 0 if int(subtype or 0) == 0 else 1
     name = _stream_name(ip, st)
+    _registered_at[name] = time.time()  # marca p/ a carencia da varredura
     source = _source_url(ip=ip, user=user, password=password, vendor=vendor, model=model, subtype=st)
 
     if _stream_registered_with_source(name, source):
@@ -159,12 +168,18 @@ def reap_idle_streams() -> List[str]:
         return []
 
     removed: List[str] = []
+    now = time.time()
     for name, info in streams.items():
         if not name.startswith("cam_"):
             continue
         consumers = (info or {}).get("consumers")
         if consumers:
             continue
+        # Carencia: nao reapa stream registrado ha pouco (o player ainda vai
+        # conectar; pelo tunel o RTSP demora mais a subir).
+        if now - _registered_at.get(name, 0.0) < _REAP_GRACE_SECONDS:
+            continue
         requests.delete(f"{GO2RTC_BASE_URL}/api/streams", params={"src": name}, timeout=5)
         removed.append(name)
+        _registered_at.pop(name, None)
     return removed

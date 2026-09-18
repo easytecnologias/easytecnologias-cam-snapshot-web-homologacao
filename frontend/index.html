@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css?v=283">
+  <link rel="stylesheet" href="styles.css?v=284">
 </head>
 <body>
 
@@ -674,9 +674,34 @@
             <div class="cam-info-row"><span>PON / ONU ID</span><span id="rpPonOnu">-</span></div>
             <div class="cam-info-row"><span>Serial</span><span id="rpSerial">-</span></div>
           </div>
-          <div class="cam-snapshot-wrap">
+          <div class="cam-snapshot-wrap" id="rpSnapshotWrap" title="Clique para ver a camera ao vivo">
             <img id="rpSnapshot" src="" alt="Snapshot" onerror="this.style.display='none'">
             <div id="rpSnapshotEmpty" class="cam-snap-empty"><i data-lucide="image-off"></i><span>Sem snapshot</span></div>
+            <div id="rpInlineLive" class="cam-inline-live hidden" onclick="event.stopPropagation()">
+              <video id="rpLiveVideo" class="hidden" autoplay muted playsinline></video>
+              <div id="rpLiveAuth" class="cam-live-auth">
+                <div>
+                  <strong>Ver ao vivo</strong>
+                  <span>Informe o acesso da camera.</span>
+                </div>
+                <input id="rpLiveUser" type="text" value="admin" autocomplete="username" placeholder="Usuario">
+                <div class="cam-live-pass-field">
+                  <input id="rpLivePass" type="password" autocomplete="current-password" placeholder="Senha">
+                  <button id="rpLivePassToggle" type="button" aria-label="Mostrar senha" title="Mostrar senha"><i data-lucide="eye"></i></button>
+                </div>
+                <button id="rpLiveStart" type="button"><i data-lucide="play-circle"></i> Entrar</button>
+              </div>
+              <div id="rpLiveStatus" class="cam-live-status hidden">
+                <i data-lucide="loader"></i>
+                <span>Conectando...</span>
+              </div>
+              <button id="rpLiveClose" class="cam-live-close" type="button" title="Voltar para snapshot"><i data-lucide="x"></i></button>
+              <button id="rpLiveFullscreen" class="cam-live-fullscreen" type="button" title="Ampliar video"><i data-lucide="maximize-2"></i></button>
+            </div>
+            <button class="cam-live-open" id="rpBtnLive" type="button" aria-label="Ver camera ao vivo">
+              <i data-lucide="play-circle"></i>
+              <span>Ver ao vivo</span>
+            </button>
             <div class="cam-snap-overlay">
               <span id="rpSnapshotTitle">-</span>
               <span id="rpSnapshotTime">-</span>
@@ -1452,19 +1477,19 @@
         </div>
 
         <div class="metrics access-live-kpis">
-          <article class="dash-kpi-card">
+          <article class="dash-kpi-card" data-access-card="entries" title="Ver quem entrou">
             <div class="metric-icon green"><i data-lucide="log-in"></i></div>
             <div><span>Entradas hoje</span><strong id="accessLiveEntries">0</strong><small>marcacoes recebidas</small></div>
           </article>
-          <article class="dash-kpi-card">
+          <article class="dash-kpi-card" data-access-card="exits" title="Ver quem saiu">
             <div class="metric-icon amber"><i data-lucide="log-out"></i></div>
             <div><span>Saidas hoje</span><strong id="accessLiveExits">0</strong><small>inclui saida manual</small></div>
           </article>
-          <article class="dash-kpi-card">
+          <article class="dash-kpi-card" data-access-card="inside" title="Ver quem esta presente">
             <div class="metric-icon cyan"><i data-lucide="users"></i></div>
             <div><span>Presentes agora</span><strong id="accessLiveInside">0</strong><small>ultima marcacao entrada</small></div>
           </article>
-          <article class="dash-kpi-card">
+          <article class="dash-kpi-card" data-access-card="attention" title="Ver pendencias">
             <div class="metric-icon red"><i data-lucide="bell-ring"></i></div>
             <div><span>A conferir</span><strong id="accessLiveAttention">0</strong><small>sem pessoa ou notificacao</small></div>
           </article>
@@ -4266,13 +4291,47 @@
 
                 <section class="recorder-config-panel" data-recorder-config-panel="network">
                   <div class="recorder-config-panel-head">
-                    <div><h3>Rede</h3><p>Configuracoes que nunca podem faltar no cadastro tecnico.</p></div>
+                    <div><h3>Rede</h3><p>IP, mascara, gateway, DNS e portas -- lido e gravado direto no gravador.</p></div>
+                    <button class="secondary-action" id="btnDeployStandaloneRecorderNetworkReload" type="button" disabled><i data-lucide="refresh-cw"></i> Consultar</button>
                   </div>
-                  <div class="recorder-config-cards">
-                    <div><span>IP fixo</span><b>Obrigatorio</b><small>IP, mascara, gateway e DNS.</small></div>
-                    <div><span>Portas</span><b>HTTP / RTSP / TCP</b><small>Necessario para web, reproducao e integracoes.</small></div>
-                    <div><span>Teste final</span><b>Validar acesso</b><small>Confirmar login depois de qualquer troca de rede.</small></div>
+                  <div class="recorder-network-form">
+                    <div class="form-group">
+                      <label for="deployStandaloneRecorderNetIp">Endereco IP</label>
+                      <input id="deployStandaloneRecorderNetIp" placeholder="192.168.1.100">
+                    </div>
+                    <div class="form-group">
+                      <label for="deployStandaloneRecorderNetMask">Mascara de sub-rede</label>
+                      <input id="deployStandaloneRecorderNetMask" placeholder="255.255.255.0">
+                    </div>
+                    <div class="form-group">
+                      <label for="deployStandaloneRecorderNetGateway">Gateway</label>
+                      <input id="deployStandaloneRecorderNetGateway" placeholder="192.168.1.1">
+                    </div>
+                    <div class="form-group">
+                      <label for="deployStandaloneRecorderNetDns1">DNS primario</label>
+                      <input id="deployStandaloneRecorderNetDns1" placeholder="8.8.8.8">
+                    </div>
+                    <div class="form-group">
+                      <label for="deployStandaloneRecorderNetDns2">DNS secundario</label>
+                      <input id="deployStandaloneRecorderNetDns2" placeholder="8.8.4.4">
+                    </div>
+                    <div class="form-group">
+                      <label for="deployStandaloneRecorderNetTcpPort">Porta TCP</label>
+                      <input id="deployStandaloneRecorderNetTcpPort" placeholder="37777">
+                    </div>
+                    <div class="form-group">
+                      <label for="deployStandaloneRecorderNetHttpPort">Porta HTTP</label>
+                      <input id="deployStandaloneRecorderNetHttpPort" placeholder="80">
+                    </div>
+                    <div class="form-group">
+                      <label for="deployStandaloneRecorderNetRtspPort">Porta RTSP</label>
+                      <input id="deployStandaloneRecorderNetRtspPort" placeholder="554">
+                    </div>
                   </div>
+                  <div class="recorder-quick-actions">
+                    <button class="primary-action" id="btnDeployStandaloneRecorderNetworkApply" type="button" disabled><i data-lucide="save"></i> Aplicar rede</button>
+                  </div>
+                  <div id="deployStandaloneRecorderNetworkResult" class="deploy-result-box muted">Entre no gravador e clique em Consultar para carregar a rede atual.</div>
                 </section>
 
                 <section class="recorder-config-panel" data-recorder-config-panel="recording">
@@ -5922,6 +5981,18 @@
     <div id="dashDrawerBody" style="overflow-y:auto;flex:1;padding:0"></div>
   </div>
 
+  <div id="accessLiveDrawerOverlay" class="dash-drawer-overlay hidden"></div>
+  <div id="accessLiveDrawer" class="dash-drawer hidden">
+    <div class="dash-drawer-header">
+      <div>
+        <p class="eyebrow" style="margin:0 0 2px">CONTROLE DE ACESSO &middot; <span id="accessLiveDrawerScope">Todos os setores</span></p>
+        <h3 id="accessLiveDrawerTitle" style="margin:0;font-size:16px;font-weight:600"></h3>
+      </div>
+      <button id="accessLiveDrawerClose" class="icon-button"><i data-lucide="x"></i></button>
+    </div>
+    <div id="accessLiveDrawerBody" style="overflow-y:auto;flex:1;padding:0"></div>
+  </div>
+
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <!-- --- MODAL: STREAM / LINKS DA CÂMERA --- -->
@@ -6244,22 +6315,22 @@
   <script src="js/dashboard.js?v=266"></script>
   <script src="js/liveStream.js?v=271"></script>
   <script src="js/cameras.js?v=269"></script>
-  <script src="js/recorders.js?v=151"></script>
+  <script src="js/recorders.js?v=161"></script>
   <script src="js/windows.js?v=142"></script>
   <script src="js/snapshots.js?v=142"></script>
   <script src="js/maintenance.js?v=146"></script>
   <script src="js/analysis.js?v=147"></script>
   <script src="js/network.js?v=158"></script>
-  <script src="js/deploy.js?v=186"></script>
+  <script src="js/deploy.js?v=187"></script>
   <script src="js/deployOlt.js?v=160"></script>
   <script src="js/connectors.js?v=161"></script>
   <script src="js/monitoring.js?v=9"></script>
-  <script src="js/planning.js?v=66"></script>
+  <script src="js/planning.js?v=69"></script>
   <script src="js/helpers.js?v=144"></script>
   <script src="js/accessControl.js?v=89"></script>
-  <script src="js/accessLive.js?v=4"></script>
+  <script src="js/accessLive.js?v=1789750400"></script>
   <script src="js/accessWhatsappTriage.js?v=3"></script>
   <script src="js/messenger.js?v=5"></script>
-  <script src="js/bootstrap.js?v=271"></script>
+  <script src="js/bootstrap.js?v=272"></script>
 </body>
 </html>

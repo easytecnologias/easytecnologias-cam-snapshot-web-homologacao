@@ -27,7 +27,14 @@ from app.services.db_store import decorate_legacy_rows
 from app.services.db_store import replace_recorder_inventory_rows
 from app.services.db_store import legacy_rows_from_db
 from app.services.db_store import load_app_settings, save_app_settings
-from app.services.pdf_inventory_report import build_inventory_pdf_report, build_inventory_preview_image, build_recorder_pdf_report
+from app.services.pdf_inventory_report import build_inventory_pdf_report, build_inventory_preview_image
+from app.services import connector_routing_vnat as _vnat
+import contextvars
+
+# Conector do request atual (setado pelos endpoints que recebem connector_id) --
+# pra virtualizar o alvo mesmo antes do gravador estar no inventario (ex.: scan).
+_rec_req_connector: "contextvars.ContextVar[str]" = contextvars.ContextVar("rec_req_connector", default="")
+from app.services.recorder_pdf_report import build_recorder_pdf_report
 from app.services.ws_scan_service import (
     _connector_from_payload,
     _connector_has_tunnel,
@@ -195,7 +202,32 @@ class DVRCameraChangeIpRequest(BaseModel):
     timeout_sec: float = Field(default=8.0, ge=1.0, le=30.0)
 
 
+def _recorder_connector_for_host(ip: str) -> str:
+    """Conector de um gravador pelo IP, lido do inventario de gravadores."""
+    ip = str(ip or "").strip()
+    if not ip:
+        return ""
+    try:
+        for r in _read_rows():
+            if str(r.get("host") or r.get("ip") or "").strip() == ip:
+                return _rec_row_connector(r)
+    except Exception:
+        pass
+    return ""
+
+
+def _reach_recorder(ip: str) -> str:
+    """IP a conectar de fato: virtual (modelo A) se o gravador for de um conector
+    isolado, senao o real. Conector vem do request (scan) ou do inventario."""
+    ip = str(ip or "").strip()
+    if not ip:
+        return ip
+    cid = _rec_req_connector.get() or _recorder_connector_for_host(ip)
+    return _vnat.virtual_ip_for(cid, ip) or ip
+
+
 def _base(ip: str, port: int) -> str:
+    ip = _reach_recorder(ip)  # conector isolado -> IP virtual (host NAT -> real)
     return f"http://{ip}:{int(port)}" if int(port) != 80 else f"http://{ip}"
 
 
@@ -2233,7 +2265,12 @@ def api_dvr_inventory(site: str = "") -> Dict[str, Any]:
 @router.post("/save")
 def api_nvr_save(req: RecorderSaveRequest) -> Dict[str, Any]:
     rows = _read_rows()
-    updates: Dict[tuple[str, str, int], Dict[str, Any]] = {}
+    # Casa a edicao por (host, canal) -- NAO por connector_id. O frontend
+    # (saveEditRec) nao envia connector_id no payload, entao incluir ele na
+    # chave fazia a edicao de uma linha COM connector nunca casar, cair no
+    # ramo de insercao e DUPLICAR a linha (com connector/site vazios). Bug real
+    # que apagou site e duplicou canais do NVR da Mega Alarmes (UFV-RODOANEL).
+    updates: Dict[tuple[str, int], Dict[str, Any]] = {}
     for item in req.recorders or []:
         host = str(item.get("host") or item.get("ip") or "").strip()
         try:
@@ -2241,8 +2278,7 @@ def api_nvr_save(req: RecorderSaveRequest) -> Dict[str, Any]:
         except Exception:
             channel = 0
         if host and channel > 0:
-            connector_id = str(item.get("remote_connector_id") or item.get("connector_id") or "").strip()
-            updates[(connector_id, host, channel)] = item
+            updates[(host, channel)] = item
 
     if not updates:
         raise HTTPException(status_code=400, detail="Nenhum canal informado para salvar.")
@@ -2267,8 +2303,7 @@ def api_nvr_save(req: RecorderSaveRequest) -> Dict[str, Any]:
             channel = int(row.get("channel") or 0)
         except Exception:
             channel = 0
-        connector_id = str(row.get("remote_connector_id") or row.get("connector_id") or "").strip()
-        key = (connector_id, host, channel)
+        key = (host, channel)
         item = updates.get(key)
         if not item:
             continue
@@ -2287,9 +2322,9 @@ def api_nvr_save(req: RecorderSaveRequest) -> Dict[str, Any]:
         if key in found:
             continue
         new_row = {field: item.get(field, "") for field in editable_fields if field in item}
-        new_row["host"] = key[1]
-        new_row["channel"] = key[2]
-        new_row.setdefault("title", str(item.get("title") or f"Canal {key[2]:02d}").strip())
+        new_row["host"] = key[0]
+        new_row["channel"] = key[1]
+        new_row.setdefault("title", str(item.get("title") or f"Canal {key[1]:02d}").strip())
         new_row.setdefault("status", str(item.get("status") or "online").strip())
         rows.append(new_row)
         inserted += 1
@@ -2703,6 +2738,121 @@ def api_dvr_local_apply(req: DVRApplyLocalRequest) -> Dict[str, Any]:
     }
 
 
+class DVRNetworkApplyRequest(BaseModel):
+    ip: str
+    user: str = "admin"
+    password: str
+    http_port: int = Field(default=80, ge=1, le=65535)
+    timeout_sec: float = Field(default=8.0, ge=1.0, le=30.0)
+    new_ip: str = ""
+    mask: str = ""
+    gateway: str = ""
+    dns1: str = ""
+    dns2: str = ""
+    new_tcp_port: int | None = Field(default=None, ge=1, le=65535)
+    new_http_port: int | None = Field(default=None, ge=1, le=65535)
+    new_rtsp_port: int | None = Field(default=None, ge=1, le=65535)
+
+
+@router.get("/network")
+def api_dvr_network_get(
+    ip: str,
+    user: str = "admin",
+    password: str = "",
+    http_port: int = 80,
+    timeout_sec: float = 8.0,
+) -> Dict[str, Any]:
+    ip = ip.strip()
+    if not ip:
+        raise HTTPException(status_code=400, detail="ip obrigatorio")
+
+    base = _base(ip, http_port)
+    auth = HTTPDigestAuth(user, password)
+    eth0_txt = _get_text(f"{base}/cgi-bin/configManager.cgi?action=getConfig&name=Network.eth0", auth, timeout_sec)
+    net_txt = _get_text(f"{base}/cgi-bin/configManager.cgi?action=getConfig&name=Network", auth, timeout_sec)
+    if not eth0_txt and not net_txt:
+        raise HTTPException(status_code=502, detail="NVR nao respondeu a consulta de rede (verifique usuario/senha)")
+
+    def pick(text: str, *patterns: str) -> str:
+        for pattern in patterns:
+            m = re.search(pattern, text, flags=re.IGNORECASE)
+            if m:
+                val = str(m.group(1) or "").strip()
+                if val:
+                    return val
+        return ""
+
+    return {
+        "ok": True,
+        "ip": pick(eth0_txt, r"\.IPAddress\s*=\s*([^\r\n]+)") or ip,
+        "mask": pick(eth0_txt, r"\.SubnetMask\s*=\s*([^\r\n]+)"),
+        "gateway": pick(eth0_txt, r"\.DefaultGateway\s*=\s*([^\r\n]+)"),
+        "dns1": pick(eth0_txt, r"\.DnsServers?\[0\]\s*=\s*([^\r\n]+)"),
+        "dns2": pick(eth0_txt, r"\.DnsServers?\[1\]\s*=\s*([^\r\n]+)"),
+        "mac": pick(eth0_txt, r"\.PhysicalAddress\s*=\s*([^\r\n]+)", r"\.MACAddress\s*=\s*([^\r\n]+)"),
+        "tcp_port": pick(net_txt, r"(?<!S)TCPPort\s*=\s*([^\r\n]+)"),
+        "http_port": pick(net_txt, r"(?<!S)HTTPPort\s*=\s*([^\r\n]+)"),
+        "https_port": pick(net_txt, r"HTTPSPort\s*=\s*([^\r\n]+)"),
+        "rtsp_port": pick(net_txt, r"RTSPPort\s*=\s*([^\r\n]+)"),
+    }
+
+
+@router.post("/network")
+def api_dvr_network_apply(req: DVRNetworkApplyRequest) -> Dict[str, Any]:
+    """Aplica config de rede completa (IP/mascara/gateway/DNS/portas), nao
+    so o IP como o /change_ip antigo. Mesma tabela CGI (configManager
+    Network / Network.eth0), so que expondo os campos que ja existiam no
+    dispositivo mas nunca tinham tela nenhuma (portas TCP/HTTP/RTSP)."""
+    ip = req.ip.strip()
+    if not ip:
+        raise HTTPException(status_code=400, detail="ip obrigatorio")
+
+    base = _base(ip, req.http_port)
+    auth = HTTPDigestAuth(req.user, req.password)
+
+    params: List[str] = []
+    new_ip = str(req.new_ip or "").strip()
+    if new_ip:
+        params.append(f"Network.eth0.IPAddress={quote(new_ip, safe='')}")
+    if str(req.mask or "").strip():
+        params.append(f"Network.eth0.SubnetMask={quote(str(req.mask).strip(), safe='')}")
+    if str(req.gateway or "").strip():
+        params.append(f"Network.eth0.DefaultGateway={quote(str(req.gateway).strip(), safe='')}")
+    if str(req.dns1 or "").strip():
+        params.append(f"Network.eth0.DnsServers[0]={quote(str(req.dns1).strip(), safe='')}")
+    if str(req.dns2 or "").strip():
+        params.append(f"Network.eth0.DnsServers[1]={quote(str(req.dns2).strip(), safe='')}")
+    if req.new_tcp_port:
+        params.append(f"Network.TCPPort={int(req.new_tcp_port)}")
+    if req.new_http_port:
+        params.append(f"Network.HTTPPort={int(req.new_http_port)}")
+    if req.new_rtsp_port:
+        params.append(f"Network.RTSPPort={int(req.new_rtsp_port)}")
+
+    if not params:
+        raise HTTPException(status_code=400, detail="nenhum campo de rede informado para aplicar")
+
+    q = "&".join(params)
+    url = f"{base}/cgi-bin/configManager.cgi?action=setConfig&{q}"
+    ok, body, status = _request_ok(url, auth, req.timeout_sec)
+    if not ok:
+        raise HTTPException(status_code=502, detail=f"falha ao aplicar config de rede: status={status} body={body[:240]}")
+
+    result: Dict[str, Any] = {"ok": True, "ip": new_ip or ip}
+    if new_ip and new_ip != ip:
+        rows = _read_rows()
+        changed = 0
+        for row in rows:
+            if str(row.get("host") or "") == ip:
+                row["host"] = new_ip
+                changed += 1
+        if changed:
+            _write_rows(rows)
+        result["old_ip"] = ip
+        result["updated_rows"] = changed
+    return result
+
+
 @router.post("/change_ip")
 def api_dvr_change_ip(req: DVRChangeIpRequest) -> Dict[str, Any]:
     ip = req.ip.strip()
@@ -2881,6 +3031,17 @@ def api_dvr_reboot(req: DVRRebootRequest) -> Dict[str, Any]:
 
 @router.post("/scan")
 def api_dvr_scan(req: DVRScanRequest) -> Dict[str, Any]:
+    # Seta o conector do request pra o _base virtualizar o probe (o gravador
+    # ainda nao esta no inventario durante a varredura). Reset garantido -- o
+    # endpoint sync roda em threadpool e a contextvar sobreviveria a request.
+    _tok = _rec_req_connector.set(str(getattr(req, "connector_id", "") or getattr(req, "remote_connector_id", "") or "").strip())
+    try:
+        return _api_dvr_scan_impl(req)
+    finally:
+        _rec_req_connector.reset(_tok)
+
+
+def _api_dvr_scan_impl(req: DVRScanRequest) -> Dict[str, Any]:
     ip = req.ip.strip()
     if not ip:
         raise HTTPException(status_code=400, detail="ip obrigatorio")

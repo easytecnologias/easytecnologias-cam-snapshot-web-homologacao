@@ -6,6 +6,13 @@ let _invOltView   = (() => {
   try { return sessionStorage.getItem('so_cam_view') || 'olt'; } catch { return 'olt'; }
 })();
 let _invOltActive = null;
+// Identidade da linha: com o isolamento por conector, dois clientes tem o MESMO
+// IP (ex.: 192.168.10.201 em Porto Real E Mata Grande). Sem o conector na chave,
+// clicar numa linha marcava as duas e abria a primeira. camKey desempata.
+function camKey(c) {
+  c = c || {};
+  return String(c.ip || '') + '|' + String(c.remote_connector_id || c.connector_id || '');
+}
 let _pingInterval = null;
 let _pendingOpenCamIp = null;
 
@@ -1635,7 +1642,7 @@ async function _camRefreshSilencioso() {
     // se o painel lateral estiver aberto, atualiza o que ele mostra
     const painel = document.getElementById('camPanel');
     if (painel && !painel.classList.contains('hidden') && _invOltActive) {
-      const atual = _invOltAll_get().find(c => c.ip === _invOltActive.ip);
+      const atual = _invOltAll_get().find(c => camKey(c) === camKey(_invOltActive));
       if (atual) openCamPanel(atual);
     }
   } catch {}
@@ -1914,7 +1921,7 @@ function renderInvOlt(cameras) {
 
   tbody.innerHTML = cameras.map(c => {
     const cells = def.row(c);
-    return `<tr class="inv-olt-row" data-ip="${esc(c.ip)}" style="cursor:pointer">
+    return `<tr class="inv-olt-row" data-ip="${esc(c.ip)}" data-key="${esc(camKey(c))}" style="cursor:pointer">
       ${cells.map((cell, i) =>
         i === 0
           ? `<td onclick="event.stopPropagation()">${cell}</td>`
@@ -1925,7 +1932,7 @@ function renderInvOlt(cameras) {
 
   tbody.querySelectorAll('.inv-olt-row').forEach(tr => {
     tr.addEventListener('click', () => {
-      const cam = _invOltAll_get().find(c => c.ip === tr.dataset.ip);
+      const cam = _invOltAll_get().find(c => camKey(c) === tr.dataset.key);
       if (cam) openCamPanel(cam);
     });
   });
@@ -1984,7 +1991,7 @@ function openCamPanel(cam) {
 
   // Destaca linha
   document.querySelectorAll('.inv-olt-row').forEach(tr => {
-    tr.classList.toggle('row-selected', tr.dataset.ip === cam.ip);
+    tr.classList.toggle('row-selected', tr.dataset.key === camKey(cam));
   });
 
   // Preenche info
@@ -2035,7 +2042,10 @@ function openCamPanel(cam) {
   };
   if (img) img.onerror = showSnapshotEmpty;
   if (cam.snapshot_url) {
-    const snapshotUrl = String(cam.snapshot_url || '');
+    // Prefixa API_BASE: no v3 (sub-path /v3-api) sem isso o <img> ia pra
+    // /data/snapshot na RAIZ (backend do prod), 404, e o snapshot "sumia" ao
+    // reabrir o painel. Prod: API_BASE == origin, entao nao muda nada.
+    const snapshotUrl = API_BASE + String(cam.snapshot_url || '');
     const sep = snapshotUrl.includes('?') ? '&' : '?';
     img.src = `${snapshotUrl}${sep}t=${Date.now()}`;
     img.style.display = 'block';
@@ -2107,7 +2117,10 @@ function runPing() {
     // sessao, no primeiro tick que falhar -- o fallback pergunta ao proprio
     // MikroTik (pode levar ate ~45s) e repetir isso a cada segundo encheria
     // a fila de jobs do conector sem necessidade.
-    const useConnector = _pingConnectorId && !_pingConnectorTried;
+    // Sempre manda o conector: com o isolamento (modelo A) e ele que roteia o
+    // ping DIRETO pro IP virtual. O backend so cai pro agente (lento) quando o
+    // direto falha, entao passar sempre nao adiciona custo pra camera online.
+    const useConnector = !!_pingConnectorId;
     if (useConnector) _pingConnectorTried = true;
     const url = `/api/cameras/ping?ip=${encodeURIComponent(ip)}&force=1`
       + (useConnector ? `&remote_connector_id=${encodeURIComponent(_pingConnectorId)}` : '');
@@ -2443,7 +2456,7 @@ async function updateCameraSnapshot(cam, cred) {
   showToast('Capturando snapshot...');
   const res = await api('/api/cameras/snapshot/capture', {
     method: 'POST',
-    body: JSON.stringify({ ip: cam.ip, user: cred.user, password: cred.pass, mode: _invOltView || 'olt' }),
+    body: JSON.stringify({ ip: cam.ip, user: cred.user, password: cred.pass, mode: _invOltView || 'olt', remote_connector_id: cam.remote_connector_id || cam.connector_id || '' }),
   });
   const data = await res?.json().catch(() => ({}));
   if (!res?.ok || data?.ok === false) {
@@ -2454,10 +2467,16 @@ async function updateCameraSnapshot(cam, cred) {
   _invOltActive = cam;
   const img = document.getElementById('cpSnapshot');
   const empty = document.getElementById('cpSnapshotEmpty');
+  // Pisca a imagem ao trocar, pra a atualizacao ser VISIVEL (no mobile o modal
+  // fecha e sem isso parecia que "nada aconteceu").
+  img.style.transition = 'opacity .25s ease';
+  img.style.opacity = '0.2';
+  img.onload = () => { img.style.opacity = '1'; };
   img.src = `${API_BASE}${data.url}?t=${Date.now()}`;
   img.style.display = 'block';
   empty.style.display = 'none';
-  showToast('Snapshot atualizado.');
+  setText('cpSnapshotTime', 'Atualizado agora');
+  showToast('✓ Snapshot atualizado!');
   setTimeout(loadInvOlt, 800);
 }
 
@@ -2488,7 +2507,8 @@ async function runCamAuthAction() {
   }
   const old = btn.innerHTML;
   btn.disabled = true;
-  btn.innerHTML = '<i data-lucide="loader-2"></i> Executando';
+  const _lbl = action === 'atualizar' ? 'Capturando snapshot...' : action === 'reboot' ? 'Reiniciando...' : 'Executando';
+  btn.innerHTML = `<i data-lucide="loader-2"></i> ${_lbl}`;
   lucide.createIcons();
   try {
     if (action === 'atualizar') await updateCameraSnapshot(cam, cred);

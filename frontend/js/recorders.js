@@ -675,6 +675,7 @@ function recSnapshotUrl(r) {
 }
 
 function openRecPanel(row) {
+  if (typeof closeRecPanelLive === 'function') closeRecPanelLive();
   _recActive = { ...row, _type: _recType };
   const r = _recActive;
   const isOnline = (r.status || '').toLowerCase() === 'online';
@@ -714,10 +715,100 @@ function openRecPanel(row) {
 }
 
 function closeRecPanel() {
+  if (typeof closeRecPanelLive === 'function') closeRecPanelLive();
   _recActive = null;
   document.getElementById('recPanelBackdrop')?.classList.add('hidden');
   document.getElementById('recPanel')?.classList.add('hidden');
   document.querySelectorAll('.inv-nvr-row').forEach(tr => tr.classList.remove('row-selected'));
+}
+
+// --- Ver ao vivo no painel do gravador (usa o camera_ip do canal) ---
+let _rpLiveHandle = null;
+
+function openRecPanelLive() {
+  const ip = _recActive?.camera_ip;
+  if (!ip) { showToast('Este canal nao tem IP de camera para ver ao vivo.', true); return; }
+  const live = document.getElementById('rpInlineLive');
+  const auth = document.getElementById('rpLiveAuth');
+  const status = document.getElementById('rpLiveStatus');
+  const video = document.getElementById('rpLiveVideo');
+  if (!live || !auth || !status || !video) return;
+  live.classList.remove('hidden');
+  status.classList.add('hidden');
+  video.classList.add('hidden');
+  video.srcObject = null;
+  const remembered = (typeof _camLiveCredGet === 'function') ? _camLiveCredGet() : {};
+  const userEl = document.getElementById('rpLiveUser');
+  const passEl = document.getElementById('rpLivePass');
+  if (userEl) userEl.value = remembered.user || 'admin';
+  if (passEl) passEl.value = remembered.pass || '';
+  // Tenta conectar direto (o servidor pode ja saber a senha da camera/site);
+  // so mostra o form se ele confirmar credential_required.
+  auth.style.display = 'none';
+  startRecPanelLive();
+}
+
+async function startRecPanelLive() {
+  const ip = _recActive?.camera_ip;
+  if (!ip) return;
+  const user = document.getElementById('rpLiveUser')?.value.trim() || 'admin';
+  const pass = document.getElementById('rpLivePass')?.value || '';
+  if (pass && typeof _camLiveCredSave === 'function') _camLiveCredSave(user, pass);
+  const auth = document.getElementById('rpLiveAuth');
+  const status = document.getElementById('rpLiveStatus');
+  const statusText = status?.querySelector('span');
+  const video = document.getElementById('rpLiveVideo');
+  if (!auth || !status || !video) return;
+  if (_rpLiveHandle) { _rpLiveHandle.stop(); _rpLiveHandle = null; }
+  auth.style.display = 'none';
+  status.classList.remove('hidden');
+  if (statusText) statusText.textContent = 'Conectando...';
+  video.srcObject = null;
+  video.classList.remove('hidden');
+  const hint = (typeof cameraStreamHint === 'function') ? cameraStreamHint(ip, _recActive) : { vendor: '', model: '' };
+  _rpLiveHandle = mountLiveStream(video, {
+    ip, user, pass, subtype: 1, vendor: hint.vendor, model: hint.model,
+    onStatus: (texto) => {
+      if (texto === 'credential_required') {
+        status.classList.add('hidden');
+        video.classList.add('hidden');
+        if (typeof _camLiveCredSave === 'function') _camLiveCredSave('', '');
+        auth.style.display = '';
+        lucide.createIcons();
+        return;
+      }
+      if (texto) {
+        if (statusText) statusText.textContent = texto;
+        status.classList.remove('hidden');
+      } else {
+        status.classList.add('hidden');
+        document.getElementById('rpInlineLive')?.classList.add('playing');
+      }
+    },
+  });
+}
+
+function closeRecPanelLive() {
+  if (_rpLiveHandle) { _rpLiveHandle.stop(); _rpLiveHandle = null; }
+  const video = document.getElementById('rpLiveVideo');
+  if (video) { video.srcObject = null; video.classList.add('hidden'); }
+  const live = document.getElementById('rpInlineLive');
+  live?.classList.remove('playing', 'mobile-fullscreen');
+  live?.classList.add('hidden');
+  const status = document.getElementById('rpLiveStatus');
+  if (status) status.classList.add('hidden');
+}
+
+function toggleRecLivePassword() {
+  const el = document.getElementById('rpLivePass');
+  if (el) el.type = el.type === 'password' ? 'text' : 'password';
+}
+
+function fullscreenRecPanelLive() {
+  const live = document.getElementById('rpInlineLive');
+  if (!live) return;
+  if (live.requestFullscreen) live.requestFullscreen().catch(() => {});
+  else live.classList.toggle('mobile-fullscreen');
 }
 
 function recActionGroups(...ids) {
@@ -836,12 +927,47 @@ async function runRecAction() {
     const res = await api(path, { method: 'POST', body: JSON.stringify(payload) });
     const body = await res?.json().catch(() => ({}));
     if (!res?.ok || body?.ok === false) throw new Error(body?.detail || body?.error || 'Falha ao executar acao.');
+    // IMPORTANTE: capturar a acao ANTES de closeRecAction(), que zera _recAction.
+    // Sem isso, os ifs abaixo comparavam _recAction (ja null) e NUNCA rodavam --
+    // por isso renomear/snapshot/trocar IP so refletiam depois de um F5.
+    const action = _recAction;
     closeRecAction();
     showToast('Acao concluida.');
-    if (_recAction === 'rename') {
+    if (action === 'snapshot' && body?.row) {
+      // O backend devolve a linha atualizada (snapshot_url/file, status, titulo).
+      // Sem aplicar isso, a imagem e o status so mudavam depois de um F5 --
+      // o painel ja tem cache-buster, mas precisa da URL/linha nova pra reabrir.
+      const patch = {
+        host: r.host, channel: r.channel,
+        snapshot_url: body.row.snapshot_url, snapshot_file: body.row.snapshot_file,
+        status: body.row.status, title: body.row.title,
+        imgbb_url: body.row.imgbb_url, imgbb_thumb_url: body.row.imgbb_thumb_url,
+      };
+      applyRecPayloadsLocally([patch], r._type);
+      _recActive = { ..._recActive, ...patch };
+    } else if (action === 'rename') {
       applyRecPayloadsLocally([{ host: r.host, channel: r.channel, title: payload.title }], r._type);
       _recActive = { ..._recActive, title: payload.title };
-    } else if (_recAction === 'ip' && r._type === 'nvr' && r.camera_ip) {
+      // Ao renomear, atualizar tambem o snapshot em segundo plano (o novo nome
+      // aparece no OSD do video). Nao trava o rename; quando a foto chega,
+      // atualiza a imagem mantendo o titulo novo.
+      api(`${base}/snapshot/update`, { method: 'POST', body: JSON.stringify({ ...common, imgbb: false }) })
+        .then(res2 => res2?.json().catch(() => ({})))
+        .then(b2 => {
+          if (!b2?.row) return;
+          const imgPatch = {
+            host: r.host, channel: r.channel,
+            snapshot_url: b2.row.snapshot_url, snapshot_file: b2.row.snapshot_file, status: b2.row.status,
+          };
+          applyRecPayloadsLocally([imgPatch], r._type);
+          if (_recActive && String(_recActive.host) === String(r.host) && Number(_recActive.channel) === Number(r.channel)) {
+            _recActive = { ..._recActive, ...imgPatch };
+            applyNvrFilters();
+            openRecPanel(_recActive);
+          }
+        })
+        .catch(() => {});
+    } else if (action === 'ip' && r._type === 'nvr' && r.camera_ip) {
       applyRecPayloadsLocally([{ host: r.host, channel: r.channel, camera_ip: payload.new_ip }], r._type);
       _recActive = { ..._recActive, camera_ip: payload.new_ip };
     }

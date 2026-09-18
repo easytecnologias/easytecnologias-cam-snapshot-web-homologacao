@@ -6184,6 +6184,16 @@ body.cam-live-lock {
   padding: 8px 10px;
   white-space: nowrap;
 }
+.recorder-network-form {
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+.recorder-network-form .form-group {
+  min-width: 0;
+}
 .recorder-deploy-channel-grid {
   padding: 16px;
   display: grid;

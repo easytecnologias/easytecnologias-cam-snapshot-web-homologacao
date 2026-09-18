@@ -684,7 +684,7 @@ async function refreshCamSnapshotsAfterRename(payloads, user, pass, mode) {
     try {
       const res = await api('/api/cameras/snapshot/capture', {
         method: 'POST',
-        body: JSON.stringify({ ip, user, password: pass, mode }),
+        body: JSON.stringify({ ip, user, password: pass, mode, remote_connector_id: cam.remote_connector_id || cam.connector_id || '' }),
       });
       const data = await res?.json().catch(() => ({}));
       if (!res?.ok || data?.ok === false || !data?.url) {
@@ -770,12 +770,17 @@ async function saveEditCam() {
       el.hidden = false;
       return;
     }
+    // Feedback: pelo tunel isolado o rename no equipamento leva alguns segundos.
+    // Sem mudar o botao, parecia que "nao fazia nada".
+    btn.disabled = true;
+    btn.innerHTML = '<i data-lucide="loader-2"></i> Renomeando no equipamento...';
+    lucide.createIcons();
     const renameRes = await api('/api/maintenance/batch/rename', {
       method: 'POST',
       body: JSON.stringify({
         user,
         pass,
-        targets: payloads.map(p => ({ ip: p.ip, title: p.titulo || p.title || '', channel: 1 })),
+        targets: payloads.map(p => ({ ip: p.ip, title: p.titulo || p.title || '', channel: 1, remote_connector_id: p.remote_connector_id || p.connector_id || '' })),
       }),
     });
     const renameBody = await renameRes?.json().catch(() => ({}));
@@ -786,19 +791,12 @@ async function saveEditCam() {
       el.hidden = false;
       return;
     }
-    btn.disabled = true;
-    btn.textContent = 'Atualizando snapshot';
-    const snap = await refreshCamSnapshotsAfterRename(payloads, user, pass, mode);
-    snapshotPatches = snap.patches || [];
-    btn.disabled = false;
-    btn.innerHTML = '<i data-lucide="check"></i> Salvar tudo';
-    lucide.createIcons();
-    if (snap.failed?.length) {
-      const first = snap.failed[0] || {};
-      showToast(`${payloads.length} camera(s) renomeada(s), mas ${snap.failed.length} snapshot(s) falharam. ${first.ip || ''} ${first.error || ''}`.trim(), true);
-    } else {
-      showToast(`${payloads.length} camera(s) salva(s), renomeada(s) e com snapshot atualizado!`);
-    }
+    // Rename OK. NAO trava a tela esperando o snapshot (lento pelo tunel):
+    // avisa ja e captura em segundo plano; quando terminar, recarrega a lista.
+    showToast(`${payloads.length} camera(s) renomeada(s)! Atualizando snapshot em 2o plano...`);
+    refreshCamSnapshotsAfterRename(payloads, user, pass, mode)
+      .then(() => { try { loadInvOlt(); } catch (_) {} })
+      .catch(() => {});
   } else {
     showToast(`${payloads.length} camera(s) salva(s)!`);
   }
@@ -1035,9 +1033,12 @@ function _runWsScan(payload) {
   let completed = false;
   const requestedMode = _normalizeScanMode(payload.inventory_mode || document.getElementById('scanMode')?.value || 'basico');
 
-  const wsProto = location.protocol === 'https:' ? 'wss' : 'ws';
   if (_scanWs) _scanWs.close();
-  _scanWs = new WebSocket(`${wsProto}://${location.host}/ws/scan`);
+  // Deriva o WS do MESMO API_BASE do HTTP: no v3 (sub-path /v3-api) o WS tem que
+  // ir pro backend do v3, senao o token do tenant cai no backend do PROD e volta
+  // "token invalido". Prod: API_BASE == origin -> comportamento inalterado.
+  const _wsBase = (typeof API_BASE === 'string' && API_BASE ? API_BASE : location.origin).replace(/^http/, 'ws');
+  _scanWs = new WebSocket(`${_wsBase}/ws/scan`);
 
   _scanWs.onopen  = () => _scanWs.send(JSON.stringify(payload));
   _scanWs.onmessage = (e) => {

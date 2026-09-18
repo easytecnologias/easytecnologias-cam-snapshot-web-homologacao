@@ -692,6 +692,7 @@ MODULE_CATALOG: List[Dict[str, str]] = [
     {"key": "playback", "label": "Reproducao", "section": "Analise"},
     {"key": "ia-nvr", "label": "IA - NVR", "section": "Analise"},
     {"key": "access-live", "label": "Acesso ao Vivo", "section": "Controle de Acesso"},
+    {"key": "access-messenger", "label": "Messenger", "section": "Controle de Acesso"},
     {"key": "access-control", "label": "Controle de Acesso", "section": "Controle de Acesso"},
 ]
 _MODULE_KEYS = {m["key"] for m in MODULE_CATALOG}

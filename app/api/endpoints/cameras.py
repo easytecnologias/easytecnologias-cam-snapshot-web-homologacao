@@ -12,6 +12,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi import Query
 from app.services.ping_service import ping as ping_with_cache
 from app.services.ws_scan_service import ping_via_connector
+from app.services import connector_routing_vnat as _vnat
 
 from pydantic import BaseModel
 
@@ -135,18 +136,38 @@ def _apply_recorder_fallback(cam: dict[str, Any], rec: dict[str, Any]) -> dict[s
     return cam
 
 
-def _camera_row_for_ip(ip: str) -> dict | None:
-    try:
-        inv = load_inventory_json() or []
-    except Exception:
-        inv = []
-    for r in inv:
-        if isinstance(r, dict) and str(r.get("ip") or "").strip() == ip:
-            return r
-    return None
+def _camera_row_for_ip(ip: str, connector_id: str = "") -> dict | None:
+    # Procura em TODOS os modos de inventario (olt, switch, basic), nao so no
+    # "olt" (default). Uma camera cadastrada via varredura em modo Switch (ou
+    # basico) existe so naquele modo -- checar so o "olt" fazia _ip_in_inventory
+    # devolver False e BLOQUEAR renomear/reboot/PTZ/snapshot com "IP nao
+    # encontrado no inventario deste cliente", mesmo com a camera na tela.
+    #
+    # connector_id: com o isolamento por conector, dois clientes tem o MESMO IP
+    # privado (ex.: 192.168.10.201 em Porto Real E Mata Grande). Sem desempatar
+    # pelo conector, um comando (snapshot/reboot/PTZ/senha) cairia na camera
+    # errada -- a primeira linha do IP. Com connector_id, casa a linha exata;
+    # sem ele, mantem o comportamento antigo (primeira linha do IP).
+    alvo = str(ip or "").strip()
+    cid = str(connector_id or "").strip()
+    fallback: dict | None = None
+    for mode in ("olt", "switch", "basic"):
+        try:
+            inv = load_inventory_json(mode=mode) or []
+        except Exception:
+            inv = []
+        for r in inv:
+            if not isinstance(r, dict) or str(r.get("ip") or "").strip() != alvo:
+                continue
+            row_conn = str(r.get("remote_connector_id") or r.get("connector_id") or "").strip()
+            if cid and row_conn == cid:
+                return r
+            if fallback is None:
+                fallback = r
+    return fallback
 
 
-def _ip_in_inventory(ip: str) -> bool:
+def _ip_in_inventory(ip: str, connector_id: str = "") -> bool:
     """Confere se um IP pertence ao inventario do tenant atual, antes de
     deixar passar um comando de hardware (reboot, PTZ, renomear, snapshot).
     Sem isso, qualquer usuario autenticado podia mandar o servidor emitir
@@ -154,10 +175,10 @@ def _ip_in_inventory(ip: str) -> bool:
     de outro cliente, ja que faixas privadas se repetem entre tenants neste
     sistema.
     """
-    return _camera_row_for_ip(ip) is not None
+    return _camera_row_for_ip(ip, connector_id) is not None
 
 
-def resolve_camera_password(ip: str, user: str, password: str) -> tuple[str, str]:
+def resolve_camera_password(ip: str, user: str, password: str, connector_id: str = "") -> tuple[str, str]:
     """Resolve usuario/senha pra falar com a camera deste IP.
 
     Se `password` veio preenchida (o operador digitou), usa ela e salva
@@ -167,7 +188,7 @@ def resolve_camera_password(ip: str, user: str, password: str) -> tuple[str, str
     nenhuma das duas, devolve senha vazia -- o chamador decide o que fazer
     (pedir a senha ao operador).
     """
-    row = _camera_row_for_ip(ip) or {}
+    row = _camera_row_for_ip(ip, connector_id) or {}
     mac = str(row.get("mac") or "").strip()
     site = str(row.get("site") or row.get("site_name") or row.get("local") or "").strip()
     user = (user or "").strip() or "admin"
@@ -556,8 +577,15 @@ async def api_cameras_ping(
     if method_n not in ("auto", "icmp", "tcp"):
         raise HTTPException(status_code=400, detail="method invÃ¡lido: use auto|icmp|tcp")
 
-    result = await ping_with_cache(ip=target, timeout=timeout, method=method_n, force=force)
     connector_id = str(remote_connector_id or "").strip()
+    # Conector isolado (modelo A): o ping DIRETO alcanca a camera pelo IP virtual
+    # (o host faz NETMAP -> real + origem isolada). Mantem o IP REAL no resultado
+    # e no cache/persist. Sem alocacao -> probe == target (comportamento atual).
+    _h, _sep, _p = target.partition(":")
+    _probe = (_vnat.virtual_ip_for(connector_id, _h) or _h) + (_sep + _p if _sep else "")
+    result = await ping_with_cache(ip=_probe, timeout=timeout, method=method_n, force=force)
+    if isinstance(result, dict) and _probe != target:
+        result["ip"] = target
     if connector_id and not bool(result.get("online")):
         via_connector = await ping_via_connector(connector_id, target)
         result["via_connector"] = via_connector
@@ -661,6 +689,7 @@ class SnapshotCaptureRequest(BaseModel):
     password: str = ""
     timeout_sec: float = 5.0
     mode: str = "olt"
+    remote_connector_id: str = ""
 
 
 @router.post("/portscan/apply", tags=["cameras"])
@@ -775,11 +804,12 @@ def api_snapshot_save(req: SnapshotSaveRequest) -> Dict[str, Any]:
 @router.post("/cameras/snapshot/capture", tags=["cameras"])
 def api_cameras_snapshot_capture(req: SnapshotCaptureRequest) -> Dict[str, Any]:
     ip = str(req.ip or "").strip()
+    connector_id = str(getattr(req, "remote_connector_id", "") or "").strip()
     if not ip:
         raise HTTPException(status_code=400, detail="ip obrigatorio")
-    if not _ip_in_inventory(ip):
+    if not _ip_in_inventory(ip, connector_id):
         raise HTTPException(status_code=404, detail="IP nao encontrado no inventario deste cliente")
-    user, password = resolve_camera_password(ip, str(req.user or ""), str(req.password or ""))
+    user, password = resolve_camera_password(ip, str(req.user or ""), str(req.password or ""), connector_id)
     if not password:
         # 428, nao 401: 401 e o codigo que o frontend trata como "sessao
         # expirada" e desloga o usuario -- aqui e so a senha DESTA camera
@@ -788,13 +818,21 @@ def api_cameras_snapshot_capture(req: SnapshotCaptureRequest) -> Dict[str, Any]:
 
     dst_dir = snapshot_storage_dir()
     dst_dir.mkdir(parents=True, exist_ok=True)
-    saved_path = get_snapshot(ip, user, password, str(dst_dir), timeout=(1.5, float(req.timeout_sec or 5.0)), retries=1)
+    # Conector isolado (modelo A): alcanca a camera pelo IP virtual (host NAT -> real).
+    probe_ip = _vnat.virtual_ip_for(connector_id, ip) or ip
+    # Conector isolado (tunel): a camera responde mais devagar (RTT + HTTP lento).
+    # Com connect=1.5s/read=5s o get_snapshot desistia e devolvia 502. Da mais tempo.
+    _ct, _rt = (6.0, 15.0) if connector_id else (1.5, float(req.timeout_sec or 5.0))
+    saved_path = get_snapshot(probe_ip, user, password, str(dst_dir), timeout=(_ct, _rt), retries=1)
     safe_ip = ip.replace(":", "__").replace(".", "_").replace("/", "_")
-    out_name = f"{safe_ip}.jpg"
+    # Nome por CONECTOR+IP: dois clientes com o mesmo 192.168.10.201 nao podem
+    # dividir o mesmo arquivo de snapshot (um sobrescreveria o do outro).
+    conn_stem = "".join(c if (c.isalnum() or c == "_") else "_" for c in connector_id)
+    out_name = f"{conn_stem}__{safe_ip}.jpg" if conn_stem else f"{safe_ip}.jpg"
     out_path = dst_dir / out_name
 
     try:
-        legacy = Path(str(saved_path)) if saved_path else dst_dir / f"{ip}.jpg"
+        legacy = Path(str(saved_path)) if saved_path else dst_dir / f"{probe_ip}.jpg"
         if legacy.exists() and legacy.is_file():
             if legacy.resolve() != out_path.resolve():
                 if out_path.exists():
@@ -810,14 +848,20 @@ def api_cameras_snapshot_capture(req: SnapshotCaptureRequest) -> Dict[str, Any]:
     rows = load_inventory_json(mode=mode) or []
     updated = False
     for cam in rows:
-        if not isinstance(cam, dict):
+        if not isinstance(cam, dict) or str(cam.get("ip") or "").strip() != ip:
             continue
-        if str(cam.get("ip") or "").strip() == ip:
-            attach_snapshot_fields(cam, ip, out_name)
-            updated = True
-            break
+        _rc = str(cam.get("remote_connector_id") or cam.get("connector_id") or "").strip()
+        if connector_id and _rc and _rc != connector_id:
+            continue  # linha de OUTRO conector (mesmo IP) -- nao anexa aqui
+        attach_snapshot_fields(cam, ip, out_name)
+        if connector_id and not _rc:
+            cam["remote_connector_id"] = connector_id
+        updated = True
+        break
     if not updated:
         cam = {"ip": ip, "titulo": "Captura manual"}
+        if connector_id:
+            cam["remote_connector_id"] = connector_id
         attach_snapshot_fields(cam, ip, out_name)
         rows.append(cam)
     save_inventory_json(rows, mode=mode)

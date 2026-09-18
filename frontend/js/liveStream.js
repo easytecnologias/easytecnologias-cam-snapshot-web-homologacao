@@ -172,8 +172,12 @@ function mountLiveStream(videoEl, opts) {
     }
     if (myGen !== generation || stopped) return;
 
-    const wsProto = location.protocol === 'https:' ? 'wss' : 'ws';
-    const socket = new WebSocket(`${wsProto}://${location.host}/go2rtc/api/ws?src=${streamName}`);
+    // Deriva o WS do go2rtc do MESMO API_BASE: no v3 (/v3-api) o prod-nginx
+    // roteia /v3-api/go2rtc/api/ws -> go2rtc do V3; sem isso ia pra /go2rtc/ na
+    // raiz (go2rtc do PROD, que nao tem o stream) -> "mse: stream not found".
+    // Prod: API_BASE == origin -> comportamento inalterado.
+    const _wsBase = ((typeof API_BASE === 'string' && API_BASE) ? API_BASE : location.origin).replace(/^http/, 'ws');
+    const socket = new WebSocket(`${_wsBase}/go2rtc/api/ws?src=${streamName}`);
     socket.binaryType = 'arraybuffer';
     ws = socket;
 
@@ -190,14 +194,22 @@ function mountLiveStream(videoEl, opts) {
       if (!sourceBuffer.updating && sourceBuffer.buffered && sourceBuffer.buffered.length) {
         const end = sourceBuffer.buffered.end(sourceBuffer.buffered.length - 1);
         const start0 = sourceBuffer.buffered.start(0);
-        const start = end - 5;
+        // Guarda mais buffer e NAO cola na borda ao vivo: toca ~2s atras dela.
+        // Antes o player perseguia a borda (acelerava ate 2x, zero folga) e,
+        // com stream de fps irregular/H.265 pelo tunel, alcancava a borda e
+        // CONGELAVA esperando o proximo frame. Agora mantem ~2-4s de folga
+        // (buffer que absorve o jitter) e so acelera de leve se atrasar demais.
+        const RETAIN = 15;
+        const start = end - RETAIN;
         if (start > start0) {
           sourceBuffer.remove(start0, start);
           ms.setLiveSeekableRange(start, end);
         }
-        if (videoEl.currentTime < start) videoEl.currentTime = start;
-        const gap = end - videoEl.currentTime;
-        videoEl.playbackRate = gap > 0.1 ? Math.min(gap, 2) : 1;
+        if (videoEl.currentTime < start || videoEl.currentTime > end) {
+          videoEl.currentTime = end - 2;
+        }
+        const behind = end - videoEl.currentTime;
+        videoEl.playbackRate = behind > 4 ? 1.3 : 1;
       }
     }
 

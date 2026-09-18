@@ -52,7 +52,12 @@ function clearApiJsonCache(match = '') {
 //  Helpers HTTP
 async function api(path, opts = {}) {
   const { skipLogout, ...fetchOpts } = opts;
-  const headers = { 'Content-Type': 'application/json', ...(fetchOpts.headers || {}) };
+  // FormData precisa que o browser calcule o boundary sozinho no
+  // Content-Type -- se a gente fixar 'application/json' aqui, o upload
+  // (ex.: import de planilha) vira bytes multipart com header de json e
+  // o backend nunca acha o campo do arquivo (422 "Field required").
+  const isFormData = fetchOpts.body instanceof FormData;
+  const headers = { ...(isFormData ? {} : { 'Content-Type': 'application/json' }), ...(fetchOpts.headers || {}) };
   if (_token) headers['Authorization'] = `Bearer ${_token}`;
   const res = await fetch(`${API_BASE}${path}`, { credentials: 'same-origin', ...fetchOpts, headers });
   const method = String(fetchOpts.method || 'GET').toUpperCase();
@@ -311,6 +316,7 @@ const VIEW_META = {
   playback:        { title: 'Reproducao',       sub: 'Busca de gravacoes por DVR' },
   'ia-nvr':        { title: 'IA  NVR',          sub: 'Indexacao e busca inteligente' },
   'access-live':    { title: 'Acesso ao Vivo', sub: 'Movimentacao em tempo real' },
+  'access-messenger': { title: 'Messenger', sub: 'Conversas de WhatsApp enviadas e recebidas' },
   'access-whatsapp-triage': { title: 'Triagem WhatsApp', sub: 'Fila de cadastros recebidos por grupos' },
   'access-control': { title: 'Controle de Acesso', sub: 'Reconhecimento facial e eventos de entrada e saida' },
   'net-operate':   { title: 'Manutencao - Operacoes', sub: 'Ferramentas de diagnostico de rede' },
@@ -349,6 +355,7 @@ const VIEW_ID_MAP = {
   playback:         'viewPlayback',
   'ia-nvr':         'viewIaNvr',
   'access-live':     'viewAccessLive',
+  'access-messenger': 'viewAccessMessenger',
   'access-whatsapp-triage': 'viewAccessWhatsappTriage',
   'access-control':  'viewAccessControl',
   'net-operate':    'viewNetOperate',
@@ -421,6 +428,7 @@ function loadView(view) {
     case 'playback':    loadPlayback();     break;
     case 'ia-nvr':      loadIaNvr();        break;
     case 'access-live':    loadAccessLive();    break;
+    case 'access-messenger': loadAccessMessenger(); break;
     case 'access-whatsapp-triage': loadAccessWhatsappTriage(); break;
     case 'access-control': loadAccessControl(); break;
     case 'olt':         loadOlt();          break;

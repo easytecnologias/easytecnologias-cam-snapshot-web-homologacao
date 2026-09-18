@@ -23,6 +23,7 @@ from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
 from app.api.endpoints.cameras import _camera_row_for_ip, _ip_in_inventory, resolve_camera_password
+from app.services import connector_routing_vnat as _vnat
 from app.core.paths import BASE_DIR, INVENTORY_JSON_PATH, DVR_INVENTORY_JSON_PATH, NVR_INVENTORY_JSON_PATH, SAIDA_DIR, DATA_DIR
 from app.core.tenant_context import get_current_tenant_slug, tenant_recorder_inventory_path, tenant_scoped_path
 from app.services.inventory_json import load_inventory_json, save_inventory_json
@@ -162,7 +163,9 @@ def _camera_web_target_url(ip: str, path: str = "", query: str = "") -> str:
     clean_path = "/" + str(path or "").lstrip("/")
     if ".." in clean_path.split("/"):
         raise HTTPException(status_code=400, detail="caminho invalido")
-    return urlunsplit(("http", host, clean_path, str(query or ""), ""))
+    # Checagens de tenant/host acima usam o IP REAL; o alvo do proxy vai pro IP
+    # VIRTUAL quando o conector e isolado (o host NAT leva ate a camera real).
+    return urlunsplit(("http", _reach(host), clean_path, str(query or ""), ""))
 
 
 def _rewrite_camera_web_content(content: bytes, *, ip: str, content_type: str) -> bytes:
@@ -404,7 +407,48 @@ def _bool_ok(resp: requests.Response | None) -> bool:
     return resp.status_code in (200, 201, 202, 204)
 
 
+def _connector_for(ip: str, hint: str = "") -> str:
+    """Conector de uma camera: usa o hint (do request) se vier, senao resolve do
+    inventario (a linha guarda remote_connector_id). Com dois clientes de MESMO
+    IP, so o hint desempata -- sem hint, pega a primeira linha do IP."""
+    hint = str(hint or "").strip()
+    if hint:
+        return hint
+    row = _camera_row_for_ip(str(ip or "").strip()) or {}
+    return str(row.get("remote_connector_id") or row.get("connector_id") or "").strip()
+
+
+def _reach(ip: str, connector_id: str = "") -> str:
+    """IP a conectar de fato: virtual (modelo A) se o conector for isolado, senao
+    o real. GATED: sem alocacao -> IP intacto."""
+    ip = str(ip or "").strip()
+    if not ip:
+        return ip
+    return _vnat.virtual_ip_for(_connector_for(ip, connector_id), ip) or ip
+
+
+def _reach_url(url: str, connector_id: str = "") -> str:
+    """Reescreve o host do URL pro IP virtual do conector (auto-resolvido). Assim
+    todo comando que passa por _request_with_auth alcanca camera de conector
+    isolado sem tocar em cada endpoint."""
+    try:
+        from urllib.parse import urlsplit, urlunsplit
+        p = urlsplit(url)
+        host = p.hostname or ""
+        v = _reach(host, connector_id)
+        if not host or v == host:
+            return url
+        netloc = f"{v}:{p.port}" if p.port else v
+        if p.username:
+            cred = p.username + (f":{p.password}" if p.password else "")
+            netloc = f"{cred}@{netloc}"
+        return urlunsplit((p.scheme, netloc, p.path, p.query, p.fragment))
+    except Exception:
+        return url
+
+
 def _request_with_auth(url: str, user: str, password: str, timeout: int = 8) -> tuple[bool, str]:
+    url = _reach_url(url)
     last_err = ""
     for auth in (HTTPDigestAuth(user, password), (user, password)):
         try:
@@ -996,6 +1040,7 @@ def maintenance_batch_reboot(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 def _cam_get(ip: str, user: str, password: str, path: str, timeout: int = 6) -> tuple[bool, str]:
     """GET com digest/basic fallback, http/https fallback. Retorna (ok, body)."""
+    ip = _reach(ip)  # conector isolado -> fala pelo IP virtual (host NAT -> real)
     for proto in ("http", "https"):
         url = f"{proto}://{ip}{path}"
         for auth in (HTTPDigestAuth(user, password), (user, password)):
@@ -1135,6 +1180,7 @@ def maintenance_mjpeg_stream(ip: str, user: str = "admin", password: str = ""):
     import requests as _req
     from requests.auth import HTTPBasicAuth
 
+    ip = _reach(ip)  # conector isolado -> IP virtual
     cam_urls = [
         f"http://{ip}/cgi-bin/mjpg/video.cgi?channel=1&subtype=1",
         f"http://{ip}/cgi-bin/mjpg/video.cgi?channel=1&subtype=0",
@@ -1239,6 +1285,7 @@ def maintenance_live_snapshot(ip: str, user: str = "admin", password: str = ""):
     import requests as _req
     from requests.auth import HTTPBasicAuth
 
+    ip = _reach(ip)  # conector isolado -> IP virtual
     for url in [
         f"http://{ip}/cgi-bin/snapshot.cgi?channel=1",
         f"http://{ip}/cgi-bin/snapshot.cgi?channel=0",
@@ -1463,8 +1510,12 @@ def maintenance_stream_register(ip: str, payload: Dict[str, Any]):
     vendor = _as_str(payload.get("vendor"))
     model = _as_str(payload.get("model"))
 
+    # Conector isolado: o go2rtc (tambem em container) alcanca a camera pelo IP
+    # VIRTUAL via o mesmo NAT do host; e o virtual e unico por conector, entao
+    # dois clientes com o mesmo IP viram streams distintos no go2rtc.
+    reach_ip = _reach(ip, str(payload.get("remote_connector_id") or ""))
     try:
-        stream_name = register_stream(ip=ip, user=user, password=password, subtype=subtype, vendor=vendor, model=model)
+        stream_name = register_stream(ip=reach_ip, user=user, password=password, subtype=subtype, vendor=vendor, model=model)
     except Exception as exc:
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=502)
     return {"ok": True, "stream_name": stream_name}
@@ -1474,7 +1525,7 @@ def maintenance_stream_register(ip: str, payload: Dict[str, Any]):
 def maintenance_stream_unregister(ip: str, subtype: int = 1):
     """Desregistra a camera do go2rtc (chamado ao fechar a tela de live view;
     a limpeza automatica periodica cobre o caso de aba fechada sem aviso)."""
-    unregister_stream(ip=ip, subtype=subtype)
+    unregister_stream(ip=_reach(ip), subtype=subtype)  # mesmo IP (virtual) do register
     return {"ok": True}
 
 
@@ -1701,6 +1752,7 @@ def _try_http_with_auth(
     Usado por reboot e rename (que tem outer-loop de multiplas URLs/portas
     em volta disso, com sua propria logica de qual erro final mostrar).
     """
+    url = _reach_url(url)  # reboot/rename/ptz -> IP virtual do conector isolado
     response = None
     error: str | None = None
     for auth in (HTTPDigestAuth(user, password), (user, password)):
@@ -1744,6 +1796,9 @@ def api_cameras_reboot(payload: Dict[str, Any]) -> Dict[str, Any]:
                 break
     except Exception:
         brand = ""
+
+    # Daqui pra baixo o `ip` so monta as URLs -- conector isolado fala pelo virtual.
+    ip = _reach(ip, str(payload.get("remote_connector_id") or ""))
 
     attempts: list[tuple[str, str, str]] = []
 
@@ -1791,6 +1846,54 @@ def api_cameras_reboot(payload: Dict[str, Any]) -> Dict[str, Any]:
             best_status_err = last_err
 
     return {"ok": False, "error": best_status_err or last_err or "Falha ao reiniciar"}
+
+
+def _xml_escape(value: str) -> str:
+    return (
+        str(value or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    )
+
+
+def _hikvision_rename_channel(
+    ip: str, port_candidates: list[int], channel: int, title: str, user: str, password: str
+) -> dict | None:
+    """Renomeia um canal Hikvision lendo o objeto INTEIRO e regravando so o
+    <name> (read-modify-write). O PUT parcial que o codigo antigo mandava
+    (so <id>+<name>) e recusado pelo NVR/DVR com badXmlContent -- era por isso
+    que renomear "nao funcionava" para camera atras de gravador. Camera avulsa
+    tem o nome em System/Video/inputs/channels/<n>; gravador tem em
+    ContentMgmt/InputProxy/channels/<n>. Retorna dict de sucesso ou None."""
+    ip = _reach(ip)  # conector isolado -> IP virtual
+    endpoints = (
+        f"/ISAPI/System/Video/inputs/channels/{int(channel)}",
+        f"/ISAPI/ContentMgmt/InputProxy/channels/{int(channel)}",
+    )
+    title_xml = _xml_escape(title)
+    for p in port_candidates:
+        for scheme in ("http", "https"):
+            if (scheme == "https" and p == 80) or (scheme == "http" and p == 443):
+                continue
+            base = f"{scheme}://{ip}:{p}"
+            for ep in endpoints:
+                url = base + ep
+                r, _err = _try_http_with_auth("GET", url, user, password, timeout=(2.5, 5.5))
+                if r is None or r.status_code != 200 or "<name>" not in (r.text or ""):
+                    continue
+                novo = re.sub(r"<name>.*?</name>", f"<name>{title_xml}</name>", r.text, count=1, flags=re.S)
+                if novo == r.text and f"<name>{title_xml}</name>" not in novo:
+                    continue
+                pr, _perr = _try_http_with_auth(
+                    "PUT", url, user, password, timeout=(2.5, 6.0),
+                    headers={"Content-Type": "application/xml"}, data=novo.encode("utf-8"),
+                )
+                body = (pr.text or "") if pr is not None else ""
+                if (
+                    pr is not None
+                    and pr.status_code in (200, 201, 202, 204)
+                    and ("<statusCode>" not in body or "<statusCode>1</statusCode>" in body)
+                ):
+                    return {"ok": True, "status": pr.status_code, "url": url, "method": "hikvision_isapi_rmw"}
+    return None
 
 
 @router.post("/cameras/rename", tags=["cameras"])
@@ -1873,6 +1976,15 @@ def api_cameras_rename(payload: Dict[str, Any]) -> Dict[str, Any]:
                 port_candidates.append(pp)
         except Exception:
             continue
+
+    # Hikvision/HiLook: renomear lendo o objeto completo e regravando so o
+    # <name> (read-modify-write). Cobre camera avulsa E camera atras de NVR/DVR,
+    # que rejeitava o PUT parcial antigo com badXmlContent (era o "renomear que
+    # nao funcionava"). Se falhar, cai no fluxo antigo (Dahua/Intelbras) abaixo.
+    hik_result = _hikvision_rename_channel(ip, port_candidates, channel, title, user, password)
+    if hik_result:
+        hik_result["inventory_updated"] = _persist_inventory_title()
+        return hik_result
 
     attempts: list[dict[str, Any]] = []
 

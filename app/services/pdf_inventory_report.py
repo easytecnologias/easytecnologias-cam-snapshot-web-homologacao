@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
@@ -575,7 +575,7 @@ def _draw_table_pages(
             page,
             draw,
             f"Relatorio de inventario | {module_label}",
-            f"Gerado em {datetime.now().strftime('%d/%m/%Y as %H:%M')}  Â·  Site: {site_label}  Â·  {total} camera{'s' if total != 1 else ''}",
+            f"Gerado em {datetime.now().strftime('%d/%m/%Y as %H:%M')}  ·  Site: {site_label}  ·  {total} camera{'s' if total != 1 else ''}",
             company_name=company_name,
             logo_path=logo_path,
             report_color=report_color,
@@ -690,7 +690,7 @@ def _draw_photo_pages(
             page,
             draw,
             f"Galeria de snapshots | {module_label}",
-            f"Gerado em {datetime.now().strftime('%d/%m/%Y as %H:%M')}  Â·  Site: {site_label}  Â·  {total} foto{'s' if total != 1 else ''}",
+            f"Gerado em {datetime.now().strftime('%d/%m/%Y as %H:%M')}  ·  Site: {site_label}  ·  {total} foto{'s' if total != 1 else ''}",
             company_name=company_name,
             logo_path=logo_path,
             report_color=report_color,
@@ -773,14 +773,14 @@ def _draw_photo_pages(
             if modelo:
                 info_bits.append(modelo)
             if info_bits:
-                draw.text((x + pad_x, info_y), _fit_text(draw, "  Â·  ".join(info_bits), f_txt, card_w - (pad_x * 2)), font=f_txt, fill=INK_MUTED)
+                draw.text((x + pad_x, info_y), _fit_text(draw, "  ·  ".join(info_bits), f_txt, card_w - (pad_x * 2)), font=f_txt, fill=INK_MUTED)
                 info_y += 26
 
             detail = ""
             if include_switch:
-                detail = f"Switch {(_to_text(r.get('switch_name')) or '-')}  Â·  Porta {(_to_text(r.get('switch_port')) or '-')}  Â·  VLAN {(_to_text(r.get('switch_vlan') or r.get('vlan')) or '-')}"
+                detail = f"Switch {(_to_text(r.get('switch_name')) or '-')}  ·  Porta {(_to_text(r.get('switch_port')) or '-')}  ·  VLAN {(_to_text(r.get('switch_vlan') or r.get('vlan')) or '-')}"
             elif include_olt:
-                detail = f"PON {(_to_text(r.get('pon') or r.get('PON')) or '-')}  Â·  ONU {(_to_text(r.get('onu_id') or r.get('ONU_ID')) or '-')}  Â·  SN {(_to_text(r.get('onu_serial') or r.get('ONU_SERIAL')) or '-')}"
+                detail = f"PON {(_to_text(r.get('pon') or r.get('PON')) or '-')}  ·  ONU {(_to_text(r.get('onu_id') or r.get('ONU_ID')) or '-')}  ·  SN {(_to_text(r.get('onu_serial') or r.get('ONU_SERIAL')) or '-')}"
             if detail:
                 draw.text((x + pad_x, info_y), _fit_text(draw, detail, f_txt_b, card_w - (pad_x * 2)), font=f_txt_b, fill=INK)
 
@@ -989,15 +989,27 @@ def _recorder_recording_text(row: Dict[str, Any]) -> str:
                 return "nao"
     status = _to_text(row.get("recording_status")).lower()
     if status:
-        if any(token in status for token in ("recording", "gravando", "active", "normal", "configurado")):
+        # "nao confirmado pelo playback": online mas o playback nao provou gravacao.
+        # Tem que vir ANTES dos tokens de "sim", senao o fallback afirmava gravacao.
+        if "nao confirmado" in status or "not confirmed" in status:
+            return "n/c"
+        if any(token in status for token in ("recording", "gravando", "playback encontrado", "active", "normal", "configurado")):
             return "sim"
-        if any(token in status for token in ("stopped", "parado", "idle", "sem gravacao", "disabled", "disable")):
+        if any(token in status for token in ("stopped", "parado", "idle", "sem playback", "sem gravacao", "disabled", "disable", "sem camera")):
             return "nao"
-    return "sim" if _recorder_channel_status(row) == "online" else "nao"
+    # Sem status conhecido: nao afirma "sim" so por estar online -> deixa indeterminado.
+    return "n/c" if _recorder_channel_status(row) == "online" else "nao"
 
 
 def _recorder_recording_known(row: Dict[str, Any]) -> bool:
     return _recorder_recording_text(row).lower() in ("sim", "nao")
+
+
+def _clean_platform_label(value: Any) -> str:
+    # O backend as vezes anexa "(true)"/"(false)" ao status da plataforma.
+    txt = _to_text(value)
+    txt = re.sub(r"\s*\((?:true|false|1|0)\)\s*$", "", txt, flags=re.IGNORECASE)
+    return txt.strip()
 
 
 def _recorder_photo_available(row: Dict[str, Any]) -> bool:
@@ -1056,7 +1068,7 @@ def _draw_recorder_overview_pages(
         page,
         draw,
         f"Relatorio tecnico | Gravadores {label}",
-        f"Gerado em {datetime.now().strftime('%d/%m/%Y as %H:%M')}  Â·  Site: {site_label}  Â·  {len(groups)} gravador{'es' if len(groups) != 1 else ''}",
+        f"Gerado em {datetime.now().strftime('%d/%m/%Y as %H:%M')}  ·  Site: {site_label}  ·  {len(groups)} gravador{'es' if len(groups) != 1 else ''}",
         company_name=company_name,
         logo_path=logo_path,
         report_color=report_color,
@@ -1089,7 +1101,7 @@ def _draw_recorder_overview_pages(
                 page,
                 draw,
                 f"Resumo tecnico | Gravadores {label}",
-                f"Site: {site_label}  Â·  continuacao",
+                f"Site: {site_label}  ·  continuacao",
                 company_name=company_name,
                 logo_path=logo_path,
                 report_color=report_color,
@@ -1105,10 +1117,13 @@ def _draw_recorder_overview_pages(
         model = _first_text(items, "nvr_model", "recorder_model", "modelo", "model")
         serial = _first_text(items, "equip_serial", "serial", "serial_number")
         local = _first_text(items, "local", "site", "site_name")
-        mac = _first_text(items, "nvr_mac", "mac")
+        # MAC do gravador: nunca cai no MAC da camera do canal (rotulo diz NVR).
+        mac = _first_text(items, "nvr_mac")
         status_ok = sum(1 for r in items if _recorder_channel_status(r) == "online")
         status_bad = sum(1 for r in items if _recorder_channel_offline(r))
-        rec_ok = sum(1 for r in items if _recorder_recording_text(r) in ("sim", "ok", "gravando", "recording"))
+        rec_sim = sum(1 for r in items if _recorder_recording_text(r) == "sim")
+        rec_nao = sum(1 for r in items if _recorder_recording_text(r) == "nao")
+        rec_nc = max(0, len(items) - rec_sim - rec_nao)
         rec_known = sum(1 for r in items if _recorder_recording_known(r))
         rec_unknown = len(items) - rec_known
         used_count = sum(1 for r in items if _recorder_channel_in_use(r))
@@ -1118,10 +1133,17 @@ def _draw_recorder_overview_pages(
         col2 = x + 1130
         col3 = x + 2230
         row_y = y + 68
-        hdd = _first_text(items, "hdd_status", "disk_status", "storage_status", "hdd_total", "disk_total", "storage_total")
+        # hdd_status e network_status ja vem como resumo pronto do backend
+        # (ex.: "normal - 10.9 TB - 100% usado"). Nao recompor por cima, senao duplica.
+        hdd_count = _first_text(items, "hdd_count")
+        hdd = _first_text(items, "hdd_status", "disk_status", "storage_status") or _first_text(items, "hdd_total", "disk_total", "storage_total")
+        if hdd and hdd_count and "disco" not in hdd.lower():
+            hdd = f"{hdd_count} disco(s) - {hdd}"
         retention = _first_text(items, "recording_days", "retention_days", "retention")
-        platform = _first_text(items, "platform_status", "cloud_status", "hik_connect_status", "p2p_status")
-        network = _first_text(items, "network_status", "nvr_ip", "gateway", "nvr_gateway")
+        platform = _clean_platform_label(_first_text(items, "hik_connect_status", "p2p_status", "platform_status", "cloud_status"))
+        nvr_ip = _first_text(items, "nvr_ip")
+        nvr_gw = _first_text(items, "nvr_gateway", "gateway")
+        network = _first_text(items, "network_status") or nvr_ip
         pending = []
         if not hdd:
             pending.append("HD")
@@ -1140,12 +1162,12 @@ def _draw_recorder_overview_pages(
             (col1, row_y + 102, "MAC NVR", mac or "-", f_mono),
             (col2, row_y, "Canais", f"{len(items)} total - {used_count} em uso - {status_bad} offline - {no_camera_count} vazios", f),
             (col2, row_y + 34, "Video loss", str(sum(1 for r in items if bool(r.get('video_loss')))), f),
-            (col2, row_y + 68, "Fotos", f"{sum(1 for r in items if _recorder_photo_available(r))} com imagem", f),
-            (col2, row_y + 102, "Gravacao", f"{rec_ok} sim - {len(items) - rec_ok} nao", f),
+            (col2, row_y + 68, "Fotos", f"{sum(1 for r in items if _recorder_photo_available(r) and not _recorder_channel_empty(r))} com imagem", f),
+            (col2, row_y + 102, "Gravacao", f"{rec_sim} sim - {rec_nao} nao - {rec_nc} n/c", f),
             (col3, row_y, "HD", hdd or "pendente de coleta", f),
-            (col3, row_y + 34, "Retencao", retention or "pendente de coleta", f),
+            (col3, row_y + 34, "Rede", network or "pendente de coleta", f_mono if (nvr_ip or nvr_gw) else f),
             (col3, row_y + 68, "Plataforma", platform or "pendente de coleta", f),
-            (col3, row_y + 102, "Rede", network or "pendente de coleta", f),
+            (col3, row_y + 102, "Retencao", retention or "pendente de coleta", f),
         ]
         for px, py, k, v, font_value in pairs:
             draw.text((px, py), f"{k}: ", font=f_b, fill=INK)
@@ -1201,7 +1223,7 @@ def _draw_recorder_channel_table_pages(
             page,
             draw,
             f"Canais e cameras | Gravadores {label}",
-            f"Site: {site_label}  Â·  {total} canal{'is' if total != 1 else ''}",
+            f"Site: {site_label}  ·  {total} canal{'is' if total != 1 else ''}",
             company_name=company_name,
             logo_path=logo_path,
             report_color=report_color,
@@ -1312,6 +1334,10 @@ def build_recorder_pdf_report(
         if include_photos:
             photo_rows = []
             for row in rows_list:
+                # Canal vazio/sem camera: o NVR devolve um frame generico reaproveitado
+                # (mesma imagem em todos). Nao entra na galeria -> "snapshot que nao existe".
+                if _recorder_channel_empty(row):
+                    continue
                 r = dict(row)
                 host = _recorder_host_text(r)
                 ch = int(r.get("channel") or 0)
@@ -1335,7 +1361,7 @@ def build_recorder_pdf_report(
             )
 
         total_pages = len(sink)
-        note = f"{len(_recorder_groups(rows_list))} gravador(es) Â· {len(rows_list)} canal(is)"
+        note = f"{len(_recorder_groups(rows_list))} gravador(es) · {len(rows_list)} canal(is)"
         if progress_cb:
             progress_cb(0, total_pages, "finalizando")
         for i, p in enumerate(sink.paths, start=1):
@@ -1377,7 +1403,7 @@ def build_inventory_preview_image(
         page,
         draw,
         f"Preview do relatorio | {module_label}",
-        f"Gerado em {datetime.now().strftime('%d/%m/%Y as %H:%M')}  Â·  Site: {site_label}",
+        f"Gerado em {datetime.now().strftime('%d/%m/%Y as %H:%M')}  ·  Site: {site_label}",
         company_name=company_name,
         logo_path=logo_path,
         report_color=report_color,
@@ -1447,7 +1473,7 @@ def build_inventory_preview_image(
             y += line_h
         draw.rectangle((x0, row_top, x0 + w, y), outline=BORDER_SOFT, width=2)
 
-    _draw_footer(draw, 1, 1, note=f"Preview rapido Â· {len(rows_list)} camera{'s' if len(rows_list) != 1 else ''} no total")
+    _draw_footer(draw, 1, 1, note=f"Preview rapido · {len(rows_list)} camera{'s' if len(rows_list) != 1 else ''} no total")
 
     # Reduz resolucao para carregar rapido no browser
     preview = page.resize((1240, 1754))

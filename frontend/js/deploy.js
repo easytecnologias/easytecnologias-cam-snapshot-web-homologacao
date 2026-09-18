@@ -406,6 +406,7 @@ let _deployStandaloneRecorderProbe = null;
 let _deployStandaloneRecorderSaved = false;
 let _deployRecorderSelectedChannel = 0;
 let _deployStandaloneRecorderSavedItems = [];
+let _deployStandaloneRecorderNetworkLoaded = false;
 let _deployStandaloneRecorderModalMode = 'create';
 
 function deployStandaloneRecorderPayload() {
@@ -709,6 +710,8 @@ function deployStandaloneRecorderUpdateQuickActions() {
     'btnDeployStandaloneRecorderSetNtp',
     'btnDeployStandaloneRecorderReboot',
     'btnDeployStandaloneRecorderFicha',
+    'btnDeployStandaloneRecorderNetworkReload',
+    'btnDeployStandaloneRecorderNetworkApply',
   ].forEach(id => {
     const btn = document.getElementById(id);
     if (btn) btn.disabled = !enabled;
@@ -723,6 +726,112 @@ function deployStandaloneRecorderSelectConfigTab(tab = 'overview') {
   document.querySelectorAll('.recorder-config-panel').forEach(panel => {
     panel.classList.toggle('active', panel.dataset.recorderConfigPanel === target);
   });
+  if (target === 'network' && _deployStandaloneRecorderProbe && !_deployStandaloneRecorderNetworkLoaded) {
+    deployStandaloneRecorderLoadNetwork();
+  }
+}
+
+function deployStandaloneRecorderSetNetworkResult(html, isError = false) {
+  const box = document.getElementById('deployStandaloneRecorderNetworkResult');
+  if (!box) return;
+  box.classList.toggle('muted', !isError);
+  box.classList.toggle('error', isError);
+  box.innerHTML = html;
+}
+
+async function deployStandaloneRecorderLoadNetwork() {
+  if (!deployStandaloneRecorderRequireLogin()) return;
+  const payload = deployStandaloneRecorderPayload();
+  const btn = document.getElementById('btnDeployStandaloneRecorderNetworkReload');
+  if (btn) { btn.disabled = true; btn.innerHTML = '<i data-lucide="loader"></i> Consultando'; lucide.createIcons(); }
+  deployStandaloneRecorderSetNetworkResult('Consultando rede atual do gravador...');
+  try {
+    const common = deployStandaloneRecorderCommonPayload(payload);
+    const qs = new URLSearchParams({
+      ip: common.ip || '', http_port: String(common.http_port || 80),
+      user: common.user || '', password: common.password || '',
+      timeout_sec: String(common.timeout_sec || 10),
+    });
+    const res = await api(`${deployStandaloneRecorderEndpointBase(payload)}/network?${qs.toString()}`);
+    const data = await res?.json().catch(() => ({}));
+    if (!res?.ok || data?.ok === false) {
+      const detail = data?.detail || data?.message || 'Falha ao consultar rede.';
+      deployStandaloneRecorderSetNetworkResult(esc(detail), true);
+      showToast(detail, true);
+      return;
+    }
+    const setVal = (id, val) => { const el = document.getElementById(id); if (el) el.value = val || ''; };
+    setVal('deployStandaloneRecorderNetIp', data.ip);
+    setVal('deployStandaloneRecorderNetMask', data.mask);
+    setVal('deployStandaloneRecorderNetGateway', data.gateway);
+    setVal('deployStandaloneRecorderNetDns1', data.dns1);
+    setVal('deployStandaloneRecorderNetDns2', data.dns2);
+    setVal('deployStandaloneRecorderNetTcpPort', data.tcp_port);
+    setVal('deployStandaloneRecorderNetHttpPort', data.http_port);
+    setVal('deployStandaloneRecorderNetRtspPort', data.rtsp_port);
+    _deployStandaloneRecorderNetworkLoaded = true;
+    deployStandaloneRecorderSetNetworkResult(`Rede consultada em ${esc(payload.recorder_host)}.`);
+  } catch (err) {
+    const detail = err?.detail || err?.message || 'Falha ao consultar rede.';
+    deployStandaloneRecorderSetNetworkResult(esc(detail), true);
+    showToast(detail, true);
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = '<i data-lucide="refresh-cw"></i> Consultar'; lucide.createIcons(); }
+    deployStandaloneRecorderUpdateQuickActions();
+  }
+}
+
+async function deployStandaloneRecorderApplyNetwork() {
+  if (!deployStandaloneRecorderRequireLogin()) return;
+  const payload = deployStandaloneRecorderPayload();
+  const getVal = id => document.getElementById(id)?.value.trim() || '';
+  const newIp = getVal('deployStandaloneRecorderNetIp');
+  const body = {
+    ...deployStandaloneRecorderCommonPayload(payload),
+    new_ip: newIp,
+    mask: getVal('deployStandaloneRecorderNetMask'),
+    gateway: getVal('deployStandaloneRecorderNetGateway'),
+    dns1: getVal('deployStandaloneRecorderNetDns1'),
+    dns2: getVal('deployStandaloneRecorderNetDns2'),
+  };
+  const tcpPort = getVal('deployStandaloneRecorderNetTcpPort');
+  const httpPort = getVal('deployStandaloneRecorderNetHttpPort');
+  const rtspPort = getVal('deployStandaloneRecorderNetRtspPort');
+  if (tcpPort) body.new_tcp_port = Number(tcpPort);
+  if (httpPort) body.new_http_port = Number(httpPort);
+  if (rtspPort) body.new_rtsp_port = Number(rtspPort);
+
+  if (!confirm(`Aplicar essas configuracoes de rede no gravador ${payload.recorder_host}?\n\nUma mudanca errada de IP/gateway/portas pode deixar o gravador inalcancavel.`)) return;
+
+  const btn = document.getElementById('btnDeployStandaloneRecorderNetworkApply');
+  if (btn) { btn.disabled = true; btn.innerHTML = '<i data-lucide="loader"></i> Aplicando'; lucide.createIcons(); }
+  deployStandaloneRecorderSetNetworkResult(`Aplicando rede em ${esc(payload.recorder_host)}...`);
+  try {
+    const res = await api(`${deployStandaloneRecorderEndpointBase(payload)}/network`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+    const data = await res?.json().catch(() => ({}));
+    if (!res?.ok || data?.ok === false) {
+      const detail = data?.detail || data?.message || 'Falha ao aplicar rede.';
+      deployStandaloneRecorderSetNetworkResult(esc(detail), true);
+      showToast(detail, true);
+      return;
+    }
+    deployStandaloneRecorderSetNetworkResult(`Rede aplicada em ${esc(data.ip || payload.recorder_host)}.`);
+    showToast('Configuracao de rede aplicada no gravador.');
+    if (newIp && newIp !== payload.recorder_host) {
+      const hostInput = document.getElementById('deployStandaloneRecorderHost');
+      if (hostInput) hostInput.value = newIp;
+    }
+  } catch (err) {
+    const detail = err?.detail || err?.message || 'Falha ao aplicar rede.';
+    deployStandaloneRecorderSetNetworkResult(esc(detail), true);
+    showToast(detail, true);
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = '<i data-lucide="save"></i> Aplicar rede'; lucide.createIcons(); }
+    deployStandaloneRecorderUpdateQuickActions();
+  }
 }
 
 function deployStandaloneRecorderRenderProbe(data = null) {
@@ -1118,6 +1227,7 @@ async function deployStandaloneRecorderLogin() {
       return;
     }
     _deployStandaloneRecorderProbe = data;
+    _deployStandaloneRecorderNetworkLoaded = false;
     deployStandaloneRecorderRenderProbe(data);
     const label = [data.brand, data.model, data.serial].filter(Boolean).join(' / ');
     deployStandaloneRecorderSetResult(`Login confirmado em ${esc(payload.recorder_host)}${label ? ` - ${esc(label)}` : ''}. Agora pode salvar no inventario.`);

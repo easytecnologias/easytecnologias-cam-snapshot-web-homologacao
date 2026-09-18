@@ -112,7 +112,7 @@ def _ensure_group(url: str, auth: str, name: str, req_id: int) -> str:
     return _text((created.get("groupids") or [""])[0])
 
 
-def sync_monitoring_to_zabbix(entity_types: tuple[str, ...] = ("olt", "onu", "access_device", "whatsapp")) -> Dict[str, Any]:
+def sync_monitoring_to_zabbix(entity_types: tuple[str, ...] = ("olt", "onu", "camera", "nvr", "dvr", "connector", "access_device", "whatsapp")) -> Dict[str, Any]:
     settings = load_app_settings()
     raw_cfg = settings.get("zabbix_ip_sync") if isinstance(settings.get("zabbix_ip_sync"), dict) else {}
     cfg = _default_zabbix_cfg(raw_cfg)

@@ -709,8 +709,8 @@ const PLANNING_DEVICE_FIELD_RULES = {
   // switch/injetor), nao do tipo do proprio equipamento. Ver refreshParentPort.
   planDevicePonField: { showOnlyFor: ['onu', 'ont'] },
   planDeviceOnuField: { showOnlyFor: ['onu', 'ont'] },
-  planDeviceSerialField: { showOnlyFor: ['onu', 'ont'] },
-  planDeviceMacField: { showOnlyFor: ['onu', 'ont', 'camera'] },
+  planDeviceSerialField: { showOnlyFor: ['onu', 'ont', 'recorder', 'switch', 'olt'] },
+  planDeviceMacField: { showOnlyFor: ['onu', 'ont', 'camera', 'recorder', 'switch', 'injector'] },
   planDeviceVlanField: { showOnlyFor: ['onu'] },
   planDeviceRouteField: { showOnlyFor: ['camera', 'cto', 'dio', 'emenda'] },
 };
@@ -956,18 +956,29 @@ function planningPortOptions(parentId, selectedPort, selfId) {
   if (!parent) return '<option value="">Escolha o equipamento em "Ligado a" primeiro</option>';
   const capacity = planningParentPortCapacity(parent);
   if (!capacity) return '<option value="">Esse equipamento nao tem portas definidas</option>';
+  // IP da camera sendo editada (do form se ja aberto, senao do cadastro).
+  // Cameras com o MESMO IP sao a mesma camera fisica (ex.: termica bi-espectro,
+  // que ocupa 2 canais no NVR mas e 1 equipamento/1 cabo) e PODEM dividir a porta.
+  const selfEl = document.getElementById('planDeviceIp');
+  const selfDev = devices.find(d => Number(d.id) === Number(selfId));
+  const selfIp = String((selfEl && selfEl.value) || selfDev?.ip || '').trim();
   const occupied = new Map();
   devices.forEach(d => {
     if (Number(d.parent_id) === Number(parentId) && Number(d.id) !== Number(selfId)) {
       const port = Number(d.metadata?.port_number);
-      if (port) occupied.set(port, d.name);
+      if (port) occupied.set(port, { name: d.name, ip: String(d.ip || '').trim() });
     }
   });
   let html = '<option value="">Selecione a porta</option>';
   for (let port = 1; port <= capacity; port++) {
-    const occupant = occupied.get(port);
+    const occ = occupied.get(port);
+    const sameCam = !!(occ && selfIp && occ.ip && occ.ip === selfIp);
+    const blocked = !!occ && !sameCam;
     const selected = String(selectedPort) === String(port);
-    html += `<option value="${port}" ${selected ? 'selected' : ''} ${occupant ? 'disabled' : ''}>Porta ${port}${occupant ? ` - ocupada (${planningEscape(occupant)})` : ''}</option>`;
+    let suffix = '';
+    if (occ && sameCam) suffix = ` - mesma camera (${planningEscape(occ.name)})`;
+    else if (occ) suffix = ` - ocupada (${planningEscape(occ.name)})`;
+    html += `<option value="${port}" ${selected ? 'selected' : ''} ${blocked ? 'disabled' : ''}>Porta ${port}${suffix}</option>`;
   }
   return html;
 }
@@ -1687,13 +1698,18 @@ function planningDistanceMeters(lat1, lon1, lat2, lon2) {
   return earth * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
+// Ancora do cabo = equipamento em que a camera esta fisicamente ligada.
+// Antes so aceitava 'box'; agora aceita tambem switch/rack/injetor/CTO/DIO/ONU
+// (a camera puxa cabo ate o equipamento pai, seja qual for -- num rack e comum
+// a camera ligar direto no switch, sem uma caixa intermediaria).
+const PLANNING_CABLE_ANCHORS = new Set(['box', 'switch', 'rack', 'injector', 'cto', 'dio', 'onu', 'ont', 'other']);
 function planningCameraBox(camera, byId) {
   const visited = new Set();
   let current = camera;
   while (current?.parent_id && !visited.has(Number(current.parent_id))) {
     visited.add(Number(current.parent_id));
     current = byId.get(Number(current.parent_id));
-    if (current?.device_type === 'box') return current;
+    if (current && PLANNING_CABLE_ANCHORS.has(current.device_type)) return current;
   }
   return null;
 }
@@ -1704,7 +1720,7 @@ function planningCableCalculation(config) {
   const rows = devices.filter(item => item.device_type === 'camera').map(camera => {
     const box = planningCameraBox(camera, byId);
     const coordinates = [camera.latitude, camera.longitude, box?.latitude, box?.longitude].map(Number);
-    if (!box || coordinates.some(value => !Number.isFinite(value))) return { camera, box, error: !box ? 'Camera sem caixa vinculada' : 'Coordenadas incompletas' };
+    if (!box || coordinates.some(value => !Number.isFinite(value))) return { camera, box, error: !box ? 'Camera sem equipamento pai vinculado' : 'Coordenadas incompletas' };
     const straight = planningDistanceMeters(...coordinates);
     // Sem percurso viario medido a mao, usa a distancia aerea (caixa->camera)
     // como base automatica -- e assim que sempre funcionou; o campo manual e

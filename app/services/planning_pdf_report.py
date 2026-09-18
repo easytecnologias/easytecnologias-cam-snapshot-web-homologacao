@@ -266,29 +266,54 @@ def generate_project_network_pdf(
         ("BOTTOMPADDING", (0, 0), (-1, -1), 8 * mm),
     ]))
 
-    flow_cells: List[Any] = []
-    for number, label in enumerate(("REDE ÓPTICA", "CAIXA DE CFTV", "ONU / ONT", "DISTRIBUIÇÃO POE", "CÂMERAS"), 1):
-        flow_cells.append([
-            Paragraph(f"ETAPA {number:02d}", styles["flow_number"]),
-            Paragraph(label, styles["flow_step"]),
-        ])
-        if number < 5:
-            flow_cells.append(Paragraph("›", styles["flow_arrow"]))
-    flow = Table([flow_cells], colWidths=[31 * mm, 3.65 * mm, 31 * mm, 3.65 * mm, 31 * mm, 3.65 * mm, 31 * mm, 3.65 * mm, 31 * mm],
-                 rowHeights=[20 * mm], hAlign="LEFT")
-    flow_style = [
-        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ("LEFTPADDING", (0, 0), (-1, -1), 4),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 4),
-        ("TOPPADDING", (0, 0), (-1, -1), 5),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+    # A "Arquitetura do projeto" reflete o que o projeto REALMENTE tem, e nao
+    # um template GPON fixo (REDE ÓPTICA -> CAIXA -> ONU -> POE -> CÂMERAS)
+    # que aparecia igual mesmo quando o projeto era so switch + câmeras.
+    # Cada etapa entra apenas se existir equipamento daquele tipo no cadastro.
+    stage_defs = [
+        ("REDE ÓPTICA", {"olt"}),
+        ("CTO / FIBRA", {"cto", "dio"}),
+        ("ONU / ONT", {"onu", "ont"}),
+        ("CAIXA DE CFTV", {"box"}),
+        ("RACK", {"rack"}),
+        ("DISTRIBUIÇÃO POE", {"switch", "injector"}),
+        ("GRAVAÇÃO", {"recorder"}),
+        ("CÂMERAS", {"camera"}),
     ]
-    for column in (0, 2, 4, 6, 8):
-        flow_style.extend([
-            ("BACKGROUND", (column, 0), (column, 0), GREEN_SOFT),
-            ("BOX", (column, 0), (column, 0), 0.6, colors.HexColor("#B9DDD0")),
-        ])
-    flow.setStyle(TableStyle(flow_style))
+    present_types = {str(item.get("device_type") or "") for item in devices}
+    stages = [label for label, types in stage_defs if types & present_types]
+
+    flow = None
+    if stages:
+        flow_cells: List[Any] = []
+        for number, label in enumerate(stages, 1):
+            flow_cells.append([
+                Paragraph(f"ETAPA {number:02d}", styles["flow_number"]),
+                Paragraph(label, styles["flow_step"]),
+            ])
+            if number < len(stages):
+                flow_cells.append(Paragraph("›", styles["flow_arrow"]))
+        arrow_w = 3.65 * mm
+        stage_w = (169.6 * mm - arrow_w * (len(stages) - 1)) / len(stages)
+        col_widths: List[float] = []
+        for idx in range(len(stages)):
+            col_widths.append(stage_w)
+            if idx < len(stages) - 1:
+                col_widths.append(arrow_w)
+        flow = Table([flow_cells], colWidths=col_widths, rowHeights=[20 * mm], hAlign="LEFT")
+        flow_style = [
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 4),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+            ("TOPPADDING", (0, 0), (-1, -1), 5),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ]
+        for column in range(0, len(col_widths), 2):
+            flow_style.extend([
+                ("BACKGROUND", (column, 0), (column, 0), GREEN_SOFT),
+                ("BOX", (column, 0), (column, 0), 0.6, colors.HexColor("#B9DDD0")),
+            ])
+        flow.setStyle(TableStyle(flow_style))
 
     purpose = Table([[
         [
@@ -325,58 +350,88 @@ def generate_project_network_pdf(
             ("Injetores PoE", str(counts["injector"])), ("CTOs", str(counts["cto"])), ("Total planejado", str(len(devices))),
         ], styles),
         Spacer(1, 7 * mm),
-        _p("Arquitetura do projeto", styles["h1"]),
-        flow,
-        Spacer(1, 7 * mm),
-        purpose,
-        PageBreak(),
-        _p("Topologia por caixa", styles["h1"]),
-        _p("Relação física e lógica entre cada caixa, seus equipamentos internos e as câmeras atendidas.", styles["body"]),
     ])
+    if flow is not None:
+        story.extend([_p("Arquitetura do projeto", styles["h1"]), flow, Spacer(1, 7 * mm)])
+    story.append(purpose)
 
-    boxes = sorted((item for item in devices if item.get("device_type") == "box"), key=lambda item: _text(item.get("name")))
-    for number, box in enumerate(boxes, 1):
-        members = descendants(int(box["id"]))
+    def _emit_topology_node(anchor: Dict[str, Any], number: int, internal_label: str) -> None:
+        members = descendants(int(anchor["id"]))
         internal = [item for item in members if item.get("device_type") != "camera"]
         cameras = [item for item in members if item.get("device_type") == "camera"]
         story.extend([
             CondPageBreak(58 * mm),
-            _p(f"{number:02d}. {_text(box.get('name'))}", styles["h1"]),
+            _p(f"{number:02d}. {_text(anchor.get('name'))}", styles["h1"]),
             _table([
                 [_p("SITE", styles["th"]), _p("COORDENADAS", styles["th"]), _p("EQUIP. INTERNOS", styles["th"]), _p("CÂMERAS", styles["th"])],
-                [_p(box.get("site_name"), styles["small_bold"], "Sem site"), _p(_coords(box), styles["small"]), _p(str(len(internal)), styles["center"]), _p(str(len(cameras)), styles["center"])],
+                [_p(anchor.get("site_name"), styles["small_bold"], "Sem site"), _p(_coords(anchor), styles["small"]), _p(str(len(internal)), styles["center"]), _p(str(len(cameras)), styles["center"])],
             ], [38 * mm, 72 * mm, 31 * mm, 28.6 * mm], alignments={2: "CENTER", 3: "CENTER"}),
-            _p("Equipamentos dentro da caixa", styles["h2"]),
+            _p(internal_label, styles["h2"]),
         ])
-        internal_rows = [[_p("TIPO", styles["th"]), _p("NOME", styles["th"]), _p("FABRICANTE / MODELO", styles["th"]), _p("SERIAL", styles["th"]), _p("MAC", styles["th"]), _p("LIGADO A", styles["th"])]]
+        internal_rows = [[_p("TIPO", styles["th"]), _p("NOME", styles["th"]), _p("FABRICANTE / MODELO", styles["th"]), _p("SERIAL", styles["th"]), _p("MAC", styles["th"]), _p("PORTA", styles["th"]), _p("LIGADO A", styles["th"])]]
         internal_rows.extend([
             [_p(TYPE_LABELS.get(str(item.get("device_type")), item.get("device_type")), styles["small"]),
              _p(item.get("name"), styles["small_bold"]), _p(_model(item), styles["small"]),
              _p((item.get("metadata") or {}).get("serial"), styles["small"]),
              _p((item.get("metadata") or {}).get("mac"), styles["small"]),
-             _p(item.get("parent_name"), styles["small"], box.get("name"))]
+             _p((f"Porta {_text((item.get('metadata') or {}).get('port_number'), '')}".strip() if _text((item.get('metadata') or {}).get('port_number'), '') else "-"), styles["small"]),
+             _p(item.get("parent_name"), styles["small"], anchor.get("name"))]
             for item in internal
-        ] or [[_p("—", styles["small"]), _p("Nenhum equipamento interno", styles["small"]), _p("—", styles["small"]), _p("—", styles["small"]), _p("—", styles["small"]), _p("—", styles["small"])]] )
-        story.extend([_table(internal_rows, [18 * mm, 34 * mm, 42 * mm, 22 * mm, 28 * mm, 34.6 * mm]), _p("Câmeras atendidas", styles["h2"])])
-        camera_rows = [[_p("CÂMERA", styles["th"]), _p("IP", styles["th"]), _p("MAC", styles["th"]), _p("FABRICANTE / MODELO", styles["th"]), _p("ROTA", styles["th"]), _p("COORDENADAS", styles["th"])]]
+        ] or [[_p("Nenhum equipamento interno", styles["small"])] + [_p("—", styles["small"]) for _ in range(6)]] )
+        story.extend([_table(internal_rows, [16 * mm, 30 * mm, 38 * mm, 20 * mm, 27 * mm, 14 * mm, 33.6 * mm]), _p("Câmeras atendidas", styles["h2"])])
+        camera_rows = [[_p("CÂMERA", styles["th"]), _p("PORTA", styles["th"]), _p("IP", styles["th"]), _p("MAC", styles["th"]), _p("FABRICANTE / MODELO", styles["th"]), _p("ROTA", styles["th"]), _p("COORDENADAS", styles["th"])]]
         for camera in cameras:
             metadata = camera.get("metadata") or {}
             route = metadata.get("route_distance_m", metadata.get("distance_to_box_m"))
             if route in (None, ""):
-                straight = _straight_line_meters(box, camera)
+                straight = _straight_line_meters(anchor, camera)
                 estimate = straight * (1 + route_margin_pct / 100) + slack_meters if straight is not None else None
                 route_label = f"{estimate:.1f} m (estimado)" if estimate is not None else "A definir"
             else:
                 route_label = f"{float(route):.1f} m"
+            port_txt = _text(metadata.get("port_number"), "")
+            port_label = f"Porta {port_txt}" if port_txt else "-"
             camera_rows.append([
-                _p(camera.get("name"), styles["small_bold"]), _p(camera.get("ip"), styles["small"], "A definir"),
+                _p(camera.get("name"), styles["small_bold"]), _p(port_label, styles["small"]),
+                _p(camera.get("ip"), styles["small"], "A definir"),
                 _p(metadata.get("mac"), styles["small"]),
                 _p(_model(camera), styles["small"]), _p(route_label, styles["right"]),
                 _p(_coords(camera), styles["small"]),
             ])
         if len(camera_rows) == 1:
-            camera_rows.append([_p("Nenhuma câmera vinculada", styles["small"]), _p("—", styles["small"]), _p("—", styles["small"]), _p("—", styles["small"]), _p("—", styles["small"]), _p("—", styles["small"])])
-        story.extend([_table(camera_rows, [46 * mm, 20 * mm, 28 * mm, 34 * mm, 22 * mm, 28.6 * mm], alignments={4: "RIGHT"}), Spacer(1, 3 * mm)])
+            camera_rows.append([_p("Nenhuma câmera vinculada", styles["small"])] + [_p("—", styles["small"]) for _ in range(6)])
+        story.extend([_table(camera_rows, [40 * mm, 15 * mm, 19 * mm, 27 * mm, 30 * mm, 21 * mm, 26.6 * mm], alignments={5: "RIGHT"}), Spacer(1, 3 * mm)])
+
+    child_ids = {int(pid) for pid in children.keys()}
+    boxes = sorted((item for item in devices if item.get("device_type") == "box"), key=lambda item: _text(item.get("name")))
+    # Equipamento de topo (sem pai) que agrega cameras/equipamentos mas nao e
+    # caixa nem rack -- tipicamente um switch/injetor/CTO/gravador ligado direto
+    # no rack. Sem esta secao, um projeto cujo no raiz e um switch renderizava a
+    # "Topologia por caixa" vazia e jogava o switch em "Itens sem vinculo",
+    # mesmo com cameras vinculadas a ele (bug relatado no UFV-RODOANEL).
+    hubs = sorted(
+        (item for item in devices
+         if not item.get("parent_id")
+         and item.get("device_type") not in ("box", "rack")
+         and int(item["id"]) in child_ids),
+        key=lambda item: _text(item.get("name")),
+    )
+    if boxes:
+        story.extend([
+            PageBreak(),
+            _p("Topologia por caixa", styles["h1"]),
+            _p("Relação física e lógica entre cada caixa, seus equipamentos internos e as câmeras atendidas.", styles["body"]),
+        ])
+        for number, box in enumerate(boxes, 1):
+            _emit_topology_node(box, number, "Equipamentos dentro da caixa")
+    if hubs:
+        story.extend([
+            PageBreak(),
+            _p("Topologia por equipamento", styles["h1"]),
+            _p("Equipamentos de topo (switch, distribuidor ou gravador) que atendem câmeras diretamente, sem uma caixa como intermediária.", styles["body"]),
+        ])
+        for number, hub in enumerate(hubs, 1):
+            _emit_topology_node(hub, number, "Equipamentos ligados")
 
     racks = sorted((item for item in devices if item.get("device_type") == "rack"), key=lambda item: _text(item.get("name")))
     if racks:
@@ -413,7 +468,12 @@ def generate_project_network_pdf(
     quantity_rows.extend([[_p(kind, styles["small_bold"]), _p(model, styles["small"]), _p(str(count), styles["center"])] for (kind, model), count in sorted(grouped.items())])
     story.append(_table(quantity_rows, [48 * mm, 93 * mm, 28.6 * mm], alignments={2: "CENTER"}))
 
-    unlinked = [item for item in devices if item.get("device_type") not in ("box", "rack") and not item.get("parent_id")]
+    unlinked = [
+        item for item in devices
+        if item.get("device_type") not in ("box", "rack")
+        and not item.get("parent_id")
+        and int(item["id"]) not in child_ids
+    ]
     if unlinked:
         story.extend([_p("Itens sem vínculo", styles["h1"]), _p("Estes equipamentos existem no projeto, mas ainda não estão ligados a uma caixa ou equipamento pai.", styles["body"])])
         unlinked_rows = [[_p("TIPO", styles["th"]), _p("NOME", styles["th"]), _p("SITE", styles["th"]), _p("COORDENADAS", styles["th"])]]

@@ -215,6 +215,8 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('btnDeployStandaloneRecorderSetNtp')?.addEventListener('click', deployStandaloneRecorderSetNtp);
   document.getElementById('btnDeployStandaloneRecorderReboot')?.addEventListener('click', deployStandaloneRecorderReboot);
   document.getElementById('btnDeployStandaloneRecorderFicha')?.addEventListener('click', deployStandaloneRecorderFicha);
+  document.getElementById('btnDeployStandaloneRecorderNetworkReload')?.addEventListener('click', deployStandaloneRecorderLoadNetwork);
+  document.getElementById('btnDeployStandaloneRecorderNetworkApply')?.addEventListener('click', deployStandaloneRecorderApplyNetwork);
   document.getElementById('deployRecorderChannelDrawerBackdrop')?.addEventListener('click', () => {
     _deployRecorderSelectedChannel = 0;
     deployRenderStandaloneRecorderChannels();
@@ -1365,6 +1367,28 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('rpBtnReboot')?.addEventListener('click', () => recPanelAction('reboot'));
   document.getElementById('rpBtnWeb')?.addEventListener('click', () => recPanelAction('web'));
   document.getElementById('rpBtnPing')?.addEventListener('click', () => recPanelAction('ping'));
+  // Ver ao vivo no painel do gravador (stream do camera_ip do canal)
+  document.getElementById('rpBtnLive')?.addEventListener('click', (event) => {
+    event.stopPropagation();
+    openRecPanelLive();
+  });
+  document.getElementById('rpSnapshotWrap')?.addEventListener('click', openRecPanelLive);
+  document.getElementById('rpLiveStart')?.addEventListener('click', startRecPanelLive);
+  document.getElementById('rpLiveClose')?.addEventListener('click', (event) => {
+    event.stopPropagation();
+    closeRecPanelLive();
+  });
+  document.getElementById('rpLiveFullscreen')?.addEventListener('click', (event) => {
+    event.stopPropagation();
+    fullscreenRecPanelLive();
+  });
+  document.getElementById('rpLivePass')?.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') startRecPanelLive();
+  });
+  document.getElementById('rpLivePassToggle')?.addEventListener('click', (event) => {
+    event.stopPropagation();
+    toggleRecLivePassword();
+  });
   document.getElementById('closeRecAction')?.addEventListener('click', closeRecAction);
   document.getElementById('cancelRecAction')?.addEventListener('click', closeRecAction);
   document.getElementById('confirmRecAction')?.addEventListener('click', runRecAction);

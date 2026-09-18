@@ -19,16 +19,59 @@ from app.services.connector_service import (
 )
 from app.services.inventory_json import inventory_row_key, load_inventory_json, save_inventory_json
 from app.services.scan_service import run_http_scan
+from app.services import connector_routing_vnat as _vnat
 
 
 async def _ws_send(ws: WebSocket, obj: Dict[str, Any]) -> None:
     await ws.send_text(json.dumps(obj, ensure_ascii=False))
 
 
-def _run_scan_in_tenant(req: ScanRequest, tenant_slug: str = "") -> Dict[str, Any]:
+def _devirtualize_inventory(connector_id: str, inventory_mode: str) -> int:
+    """Reescreve IPs virtuais (10.208.x, do modelo A) de volta pra reais no
+    inventario deste conector -- a varredura direta proba o virtual mas o
+    operador tem que ver o IP REAL. Fora do range virtual -> nao mexe."""
+    if not _vnat.has_mapping(connector_id):
+        return 0
+    raw = str(inventory_mode or "olt").strip().lower()
+    if raw in {"switch", "sw", "via_switch", "via-switch"}:
+        inventory_mode = "switch"
+    elif raw in {"basic", "basico", "básico", "base"}:
+        inventory_mode = "basic"
+    else:
+        inventory_mode = "olt"
+    rows = load_inventory_json(mode=inventory_mode) or []
+    if not isinstance(rows, list):
+        return 0
+    changed = 0
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        key = "ip" if r.get("ip") is not None else ("IP" if r.get("IP") is not None else "ip")
+        ip = str(r.get(key) or "").strip()
+        if not ip:
+            continue
+        real = _vnat.real_ip_for(connector_id, ip)
+        if real and real != ip:
+            r[key] = real
+            r.setdefault("remote_connector_id", connector_id)
+            changed += 1
+    if changed:
+        save_inventory_json(rows, mode=inventory_mode)
+    return rows  # devolve as linhas REAIS pro chamador refletir no result da WS
+
+
+def _run_scan_in_tenant(req: ScanRequest, tenant_slug: str = "", devirtualize_connector: str = "") -> Dict[str, Any]:
     ctx = set_current_tenant_slug(tenant_slug)
     try:
-        return run_http_scan(req)
+        result = run_http_scan(req)
+        if devirtualize_connector:
+            rows = _devirtualize_inventory(devirtualize_connector, str(getattr(req, "inventory_mode", "olt") or "olt"))
+            # O result devolvido pela WS tem que carregar os IPs REAIS -- o front
+            # usa result["inventory"] pra pingar/capturar; com o IP virtual dava 404.
+            if isinstance(rows, list):
+                result["inventory"] = rows
+                result["inventory_count"] = len(rows)
+        return result
     finally:
         reset_current_tenant_slug(ctx)
 
@@ -332,10 +375,20 @@ def _tag_rows_for_connector(payload: Dict[str, Any], result: Dict[str, Any], ten
             ip = str(row.get("ip") or row.get("IP") or "").strip()
             if ip not in targets:
                 continue
-            if site:
-                row["local"] = row.get("local") or site
-                row["site"] = row.get("site") or site
-                row["site_name"] = row.get("site_name") or site
+            # Nao re-etiquetar linha que ja pertence a OUTRO conector -- senao um
+            # scan de Porto Real re-tagueia o .201 da Mata Grande, as chaves ficam
+            # iguais e uma sobrescreve a outra (mesmo IP, tenants/sites diferentes).
+            _ec = str(row.get("remote_connector_id") or "").strip()
+            if _ec and _ec != str(connector.get("id") or ""):
+                continue
+            # Site autoritativo do CONECTOR (nao do campo "Local" da tela, que pode
+            # estar com o valor de outro site) -- senao a camera de um conector sai
+            # rotulada com o site de outro, como aconteceu com o .201 de Mata Grande.
+            _cs = str(connector.get("site") or connector.get("client") or connector.get("name") or site).strip()
+            if _cs:
+                row["local"] = _cs
+                row["site"] = _cs
+                row["site_name"] = _cs
             row["remote"] = True
             row["remote_connector_id"] = connector.get("id")
             row["remote_connector_name"] = connector.get("name") or site
@@ -490,6 +543,13 @@ async def run_ws_scan(ws: WebSocket, payload: Dict[str, Any], tenant_slug: str =
     auto_targets = _targets_for_connector_scan(alvo, connector)
     effective_alvo = alvo or ",".join(auto_targets)
 
+    # Modelo A (isolamento): no caminho DIRETO o container fala com o IP VIRTUAL do
+    # conector (o host faz NETMAP -> real + origem isolada, sem cruzar IP igual de
+    # outro cliente). GATED: conector sem alocacao -> direct_alvo == effective_alvo.
+    # O alvo REAL (effective_alvo) segue sendo usado pra tag/known_targets/agente;
+    # depois do scan direto, _run_scan_in_tenant des-virtualiza o inventario.
+    direct_alvo = _vnat.virtualize_target(connector_id, effective_alvo) or effective_alvo
+
     # Compatibilidade de payload:
     # - Front atual usa: snapshot/imgbb/excel/olt_enrich/ia
     # - Alguns clientes usam: capture_snapshot/upload_imgbb/generate_spreadsheet/enrich_with_olt/run_image_health_ai
@@ -501,7 +561,7 @@ async def run_ws_scan(ws: WebSocket, payload: Dict[str, Any], tenant_slug: str =
     ia = bool(payload.get("ia", payload.get("run_image_health_ai", False)))
 
     req = ScanRequest(
-        alvo=effective_alvo,
+        alvo=direct_alvo,
         usuario=usuario,
         senha=senha,
         capture_snapshot=snapshot,
@@ -537,7 +597,7 @@ async def run_ws_scan(ws: WebSocket, payload: Dict[str, Any], tenant_slug: str =
     # ambiguidade real: se responde, caminho local direto -- rapido, com
     # snapshot, igual funcionou pra Incoforte; se nao, caminho MikroTik --
     # mais lento, so descoberta, mas nunca marca tudo como offline por engano.
-    probe_targets = _pick_probe_targets(effective_alvo)
+    probe_targets = _pick_probe_targets(direct_alvo)
     expanded_targets = _expand_remote_targets(effective_alvo)
     if connector_id and expanded_targets:
         try:
@@ -571,7 +631,7 @@ async def run_ws_scan(ws: WebSocket, payload: Dict[str, Any], tenant_slug: str =
             remote_payload["alvo"] = effective_alvo
             result = await _remote_inventory_via_connector(ws, remote_payload, result, str(tenant_slug or "").strip().lower())
         else:
-            result = await anyio.to_thread.run_sync(_run_scan_in_tenant, req, str(tenant_slug or "").strip().lower())
+            result = await anyio.to_thread.run_sync(_run_scan_in_tenant, req, str(tenant_slug or "").strip().lower(), connector_id)
             tag_payload = dict(payload)
             tag_payload["alvo"] = effective_alvo
             result = _tag_rows_for_connector(tag_payload, result, str(tenant_slug or "").strip().lower())

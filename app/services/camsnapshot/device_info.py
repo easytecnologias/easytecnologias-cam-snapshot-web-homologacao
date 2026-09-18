@@ -790,7 +790,10 @@ def get_snapshot(ip, user, password, output_dir="output/snapshot", timeout=(1.2,
     os.makedirs(output_dir, exist_ok=True)
     likely_unv = False
     try:
-        unv_info = _probe_unv_lapi(ip, user, password, timeout)
+        # Probe de deteccao UNV: cap curto (nao herda o timeout longo do isolado,
+        # senao pendura ~15s numa Intelbras/Dahua que nao tem esse endpoint).
+        _pt = (min(float(timeout[0]), 1.5), min(float(timeout[1]), 2.0)) if isinstance(timeout, (tuple, list)) else (1.5, 2.0)
+        unv_info = _probe_unv_lapi(ip, user, password, _pt)
         likely_unv = bool(unv_info and str(unv_info.get("fabricante") or "").strip().upper() == "UNV")
     except Exception:
         likely_unv = False
