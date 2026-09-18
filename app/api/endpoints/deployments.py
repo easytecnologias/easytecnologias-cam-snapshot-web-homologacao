@@ -15,8 +15,10 @@ from requests.auth import HTTPBasicAuth, HTTPDigestAuth
 
 from app.core.tenant_context import tenant_recorder_inventory_path, tenant_scoped_path, tenant_snapshot_dir
 from app.services.connector_service import get_connector, list_connectors, register_connector_known_targets
+from app.services import connector_routing_vnat as _vnat
 from app.services.inventory_json import inventory_row_key, load_inventory_json, save_inventory_json
 from app.services.camsnapshot.device_info import get_network_config, set_network_ip, set_channel_title
+from app.api.endpoints.nvr import _recorder_connector_for_host
 
 router = APIRouter(prefix="/api/deployments", tags=["deployments"])
 
@@ -57,6 +59,24 @@ def _parse_lat_lon(value: Any) -> tuple[str, str]:
     if not (-90 <= lat <= 90 and -180 <= lon <= 180):
         return "", ""
     return f"{lat:.8f}".rstrip("0").rstrip("."), f"{lon:.8f}".rstrip("0").rstrip(".")
+
+
+def _reach_deploy_host(host: str, connector_id: str = "") -> str:
+    """Gravador atras de conector isolado -> IP virtual (vnat) pra o
+    container da API alcancar. Sem mapa vnat, devolve o host real intacto."""
+    real = _text(host)
+    if not real:
+        return real
+    cid = _text(connector_id)
+    if not cid:
+        try:
+            cid = _recorder_connector_for_host(real)
+        except Exception:
+            cid = ""
+    try:
+        return _vnat.virtual_ip_for(cid, real) or real
+    except Exception:
+        return real
 
 
 def _recorder_base_url(host: str, port: Any = None) -> str:
@@ -624,7 +644,8 @@ def api_deployments_recorder_login(payload: Dict[str, Any]) -> Dict[str, Any]:
         except Exception:
             pass
 
-    base = _recorder_base_url(host, payload.get("recorder_http_port") or payload.get("http_port"))
+    reach_host = _reach_deploy_host(host, connector_id)
+    base = _recorder_base_url(reach_host, payload.get("recorder_http_port") or payload.get("http_port"))
     probes = [
         ("/cgi-bin/magicBox.cgi?action=getSystemInfo", "intelbras"),
         ("/cgi-bin/magicBox.cgi?action=getDeviceType", "intelbras"),
@@ -705,10 +726,12 @@ def api_deployments_recorder_channels(payload: Dict[str, Any]) -> Dict[str, Any]
         total = 32
     user = _text(payload.get("recorder_user") or payload.get("user") or "admin")
     password = _text(payload.get("recorder_password") or payload.get("password"))
+    connector_id = _text(payload.get("connector_id") or payload.get("remote_connector_id"))
     live_used: Dict[int, Dict[str, str]] = {}
     live_authoritative = False
     if user and password:
-        base = _recorder_base_url(host, payload.get("recorder_http_port") or payload.get("http_port"))
+        reach_host = _reach_deploy_host(host, connector_id)
+        base = _recorder_base_url(reach_host, payload.get("recorder_http_port") or payload.get("http_port"))
         live_used, live_authoritative = _fetch_recorder_live_channels(base, user, password, total)
     channels = _recorder_channel_grid(source, host, total, live_used=live_used, live_authoritative=live_authoritative)
     used = sum(1 for item in channels if item.get("used"))
@@ -748,7 +771,9 @@ def api_deployments_recorder_add_camera(payload: Dict[str, Any]) -> Dict[str, An
     if not title:
         raise HTTPException(status_code=400, detail="titulo da camera obrigatorio")
 
-    base = _recorder_base_url(host, payload.get("recorder_http_port") or payload.get("http_port"))
+    connector_id = _text(payload.get("connector_id") or payload.get("remote_connector_id"))
+    reach_host = _reach_deploy_host(host, connector_id)
+    base = _recorder_base_url(reach_host, payload.get("recorder_http_port") or payload.get("http_port"))
     live_used, live_authoritative = _fetch_recorder_live_channels(base, user, password, total)
     if not live_authoritative:
         raise HTTPException(status_code=400, detail="nao consegui confirmar os canais ao vivo do gravador")
