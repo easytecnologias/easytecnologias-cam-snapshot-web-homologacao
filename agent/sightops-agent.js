@@ -103,6 +103,8 @@ function sendJson(res, code, obj, origin) {
     'Content-Type': 'application/json',
     'Access-Control-Allow-Origin': origin || '*',
     'Access-Control-Allow-Headers': 'Content-Type',
+    // PNA: navegador HTTPS -> 127.0.0.1 exige este header (Chrome/Edge).
+    'Access-Control-Allow-Private-Network': 'true',
     'Cache-Control': 'no-store',
   });
   res.end(body);
@@ -115,6 +117,8 @@ const control = http.createServer(async (req, res) => {
       'Access-Control-Allow-Origin': origin,
       'Access-Control-Allow-Headers': 'Content-Type',
       'Access-Control-Allow-Methods': 'GET, OPTIONS',
+      // PNA: responde ao preflight Access-Control-Request-Private-Network.
+      'Access-Control-Allow-Private-Network': 'true',
     });
     return res.end();
   }

@@ -21,7 +21,7 @@ async function openDeviceWeb(ip, port) {
   let health = null;
   try {
     const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), 1200);
+    const t = setTimeout(() => ctrl.abort(), 2500);
     const r = await fetch(`${SIGHTOPS_AGENT_URL}/health`, { signal: ctrl.signal });
     clearTimeout(t);
     health = r.ok ? await r.json() : null;
