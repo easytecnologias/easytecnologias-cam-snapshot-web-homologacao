@@ -241,14 +241,16 @@ function openConnectorActionMenu(event, connectorId, trigger) {
   menu.innerHTML = isRuijie ? `
     <button type="button" data-action="ruijie-lan"><i data-lucide="scan-search"></i><span>Coletar LAN</span></button>
     <button type="button" data-action="ruijie-vpn"><i data-lucide="shield"></i><span>Configurar VPN</span></button>
+    <button type="button" data-action="pc-agent"><i data-lucide="monitor-down"></i><span>Baixar agente (PC)</span></button>
     <button type="button" class="danger" data-action="delete"><i data-lucide="trash-2"></i><span>Excluir</span></button>` : `
     <button type="button" data-action="download"><i data-lucide="download"></i><span>Baixar script</span></button>
     <button type="button" data-action="vpn"><i data-lucide="shield"></i><span>Configurar VPN</span></button>
+    <button type="button" data-action="pc-agent"><i data-lucide="monitor-down"></i><span>Baixar agente (PC)</span></button>
     <button type="button" class="danger" data-action="delete"><i data-lucide="trash-2"></i><span>Excluir</span></button>`;
   document.body.appendChild(menu);
   const rect = trigger.getBoundingClientRect();
   const menuWidth = 210;
-  const menuHeight = 140;
+  const menuHeight = 184;
   menu.style.left = `${Math.max(8, Math.min(window.innerWidth - menuWidth - 8, rect.right - menuWidth))}px`;
   menu.style.top = `${rect.bottom + menuHeight + 8 <= window.innerHeight ? rect.bottom + 6 : Math.max(8, rect.top - menuHeight - 6)}px`;
   menu.addEventListener('click', ev => {
@@ -259,9 +261,25 @@ function openConnectorActionMenu(event, connectorId, trigger) {
     if (action === 'vpn') downloadConnectorVpn(connectorId);
     if (action === 'ruijie-lan') collectRuijieLanInventory(connectorId);
     if (action === 'ruijie-vpn') openRuijieVpnModal(connectorId);
+    if (action === 'pc-agent') downloadPcAgent();
     if (action === 'delete') deleteConnector(connectorId);
   });
   lucide.createIcons();
+}
+
+function downloadPcAgent() {
+  // Agente de acesso web direto (.exe Windows), servido estatico pelo frontend
+  // em <base>/downloads/. Instalado uma vez, o botao Web abre a UI do
+  // dispositivo direto pelo tunel (sem SSH/proxy). Ver agent/README.md.
+  const a = document.createElement('a');
+  a.href = 'downloads/sightops-agent.exe';
+  a.download = 'sightops-agent.exe';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  if (typeof showToast === 'function') {
+    showToast('Baixando o SightOps Agent. Instale/execute uma vez; depois o botao Web abre os dispositivos direto.', false);
+  }
 }
 
 function openConnectorVpnModal(connectorId, endpointDefault = '201.182.184.84:51820') {

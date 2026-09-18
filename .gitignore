@@ -112,3 +112,8 @@ tmp/
 *.hevc
 *.h264
 *.h265
+
+# Agente: build local (o .exe e distribuido pelo frontend/downloads, nao pelo git)
+agent/node_modules/
+agent/dist/
+*.exe

@@ -1,0 +1,16 @@
+{
+  "name": "sightops-agent",
+  "version": "1.0.0",
+  "description": "SightOps Agent - acesso web direto a dispositivos via tunel",
+  "bin": "sightops-agent.js",
+  "main": "sightops-agent.js",
+  "dependencies": {
+    "ws": "^8.21.3"
+  },
+  "pkg": {
+    "targets": [
+      "node18-win-x64"
+    ],
+    "outputPath": "dist"
+  }
+}
