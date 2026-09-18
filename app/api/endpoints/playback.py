@@ -35,6 +35,7 @@ class PlaybackClipRequest(BaseModel):
     end: str
     format: Literal["mp4", "dav"] = "mp4"
     timeout_sec: int = Field(default=180, ge=10, le=900)
+    connector_id: str = Field(default="", max_length=80)
 
 
 class PlaybackSnapshotRequest(BaseModel):
@@ -44,6 +45,7 @@ class PlaybackSnapshotRequest(BaseModel):
     channel: int = Field(ge=0, le=256)
     timestamp: str
     timeout_sec: int = Field(default=45, ge=10, le=180)
+    connector_id: str = Field(default="", max_length=80)
 
 
 class PlaybackFramesRequest(PlaybackClipRequest):
@@ -64,10 +66,32 @@ def _clean_host_or_422(host: str) -> str:
         raise HTTPException(status_code=422, detail="DVR inválido.") from exc
 
 
+def _reach_playback_host(host: str, connector_id: str = "") -> str:
+    """Gravador de conector isolado -> IP virtual (vnat) pra baixar a gravacao
+    pelo tunel. O download e HTTP (loadfile.cgi/RPC), entao TCP virtual passa.
+    O conector vem do request ou, se vazio, do inventario de gravadores (mesma
+    logica do scan em nvr.py). Sem mapa vnat, virtual_ip_for devolve o IP real."""
+    real = str(host or "").strip()
+    if not real:
+        return host
+    try:
+        from app.services import connector_routing_vnat as _vnat
+        cid = str(connector_id or "").strip()
+        if not cid:
+            try:
+                from app.api.endpoints.nvr import _recorder_connector_for_host
+                cid = _recorder_connector_for_host(real)
+            except Exception:
+                cid = ""
+        return _vnat.virtual_ip_for(cid, real) or real
+    except Exception:
+        return real
+
+
 def _download_dav_or_http(payload: PlaybackClipRequest, start: datetime, end: datetime, out_path: Path) -> None:
     try:
         download_dav(
-            host=payload.host,
+            host=_reach_playback_host(payload.host, getattr(payload, "connector_id", "")),
             user=payload.user,
             password=payload.password,
             channel=payload.channel,
