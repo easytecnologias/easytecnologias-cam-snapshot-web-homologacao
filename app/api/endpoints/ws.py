@@ -629,3 +629,83 @@ async def ws_maintenance_ping(ws: WebSocket) -> None:
         reset_current_tenant_slug(ctx_token)
 
 
+@router.websocket("/ws/web-tunnel/{ip}")
+async def ws_web_tunnel(ws: WebSocket, ip: str) -> None:
+    """Ponte WebSocket<->TCP pro AGENTE local: o agente abre 127.0.0.1:porta no
+    PC do usuario e canaliza os bytes por este WS ate o dispositivo, alcancado
+    pelo IP VIRTUAL do conector (vnat/wgc). Assim a UI da camera/NVR abre direta,
+    sem reconstrucao de HTML e sem expor porta publica. Auth pela mesma sessao
+    (token na query, sem consumir frame). `?port=` = porta web do dispositivo."""
+    ok, current_user, _first = await _accept_ws_session(ws, min_role="operator")
+    if not ok:
+        return
+    ctx_token = set_current_tenant_slug(_effective_tenant_slug(current_user))
+    writer = None
+    try:
+        try:
+            port = int(ws.query_params.get("port") or 80)
+        except Exception:
+            port = 80
+        if port < 1 or port > 65535:
+            await ws.close(code=4400)
+            return
+        from app.api.endpoints.maintenance import (
+            _is_proxy_allowed_host,
+            _ip_belongs_to_current_tenant,
+            _reach,
+        )
+        host = str(ip or "").strip()
+        # mesma politica do proxy web: so IP privado/CGNAT e do tenant atual
+        if not _is_proxy_allowed_host(host) or not _ip_belongs_to_current_tenant(host):
+            await ws.close(code=4403)
+            return
+        reach = _reach(host)  # conector isolado -> IP virtual
+        try:
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_connection(reach, port), timeout=10.0
+            )
+        except Exception:
+            await ws.close(code=4502)
+            return
+
+        cancel = asyncio.Event()
+
+        async def _ws_to_tcp() -> None:
+            try:
+                while not cancel.is_set():
+                    data = await ws.receive_bytes()
+                    if not data:
+                        continue
+                    writer.write(data)
+                    await writer.drain()
+            except Exception:
+                pass
+            finally:
+                cancel.set()
+
+        async def _tcp_to_ws() -> None:
+            try:
+                while not cancel.is_set():
+                    data = await reader.read(65536)
+                    if not data:
+                        break
+                    await ws.send_bytes(data)
+            except Exception:
+                pass
+            finally:
+                cancel.set()
+
+        await asyncio.gather(_ws_to_tcp(), _tcp_to_ws())
+    finally:
+        try:
+            if writer is not None:
+                writer.close()
+        except Exception:
+            pass
+        reset_current_tenant_slug(ctx_token)
+        try:
+            await ws.close()
+        except Exception:
+            pass
+
+
