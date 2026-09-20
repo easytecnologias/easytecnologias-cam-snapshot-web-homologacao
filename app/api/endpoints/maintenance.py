@@ -424,8 +424,17 @@ def _connector_tunnel_ip_owner(ip: str) -> str:
         from app.services.connector_service import list_connectors
         for row in (list_connectors().get("connectors") or []):
             addr = str(((row.get("tunnel") or {}).get("client_address")) or "").strip()
-            if addr.split("/")[0].strip() == alvo:
-                return str(row.get("id") or "").strip()
+            if addr.split("/")[0].strip() != alvo:
+                continue
+            cid = str(row.get("id") or "").strip()
+            # EXIGE mapa vnat pro IP do roteador. Sem ele o pacote sai pela
+            # tabela de rota PADRAO, que manda 10.250.0.x pela wg-sightops
+            # (rede compartilhada) -- onde esse IP e de OUTRO roteador. Foi
+            # medido em producao: PORTO REAL caia na TELHA e MATA GRANDE na
+            # JAPARATINGA. Sem virtualizacao nao ha isolamento, entao recusa.
+            if not cid or (_vnat.virtual_ip_for(cid, alvo) or alvo) == alvo:
+                return ""
+            return cid
     except Exception:
         return ""
     return ""
