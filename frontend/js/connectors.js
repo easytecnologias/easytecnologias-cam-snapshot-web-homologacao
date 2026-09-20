@@ -241,16 +241,18 @@ function openConnectorActionMenu(event, connectorId, trigger) {
   menu.innerHTML = isRuijie ? `
     <button type="button" data-action="ruijie-lan"><i data-lucide="scan-search"></i><span>Coletar LAN</span></button>
     <button type="button" data-action="ruijie-vpn"><i data-lucide="shield"></i><span>Configurar VPN</span></button>
+    <button type="button" data-action="router-winbox"><i data-lucide="terminal"></i><span>Acessar via Winbox</span></button>
     <button type="button" data-action="pc-agent"><i data-lucide="monitor-down"></i><span>Baixar agente (PC)</span></button>
     <button type="button" class="danger" data-action="delete"><i data-lucide="trash-2"></i><span>Excluir</span></button>` : `
     <button type="button" data-action="download"><i data-lucide="download"></i><span>Baixar script</span></button>
     <button type="button" data-action="vpn"><i data-lucide="shield"></i><span>Configurar VPN</span></button>
+    <button type="button" data-action="router-winbox"><i data-lucide="terminal"></i><span>Acessar via Winbox</span></button>
     <button type="button" data-action="pc-agent"><i data-lucide="monitor-down"></i><span>Baixar agente (PC)</span></button>
     <button type="button" class="danger" data-action="delete"><i data-lucide="trash-2"></i><span>Excluir</span></button>`;
   document.body.appendChild(menu);
   const rect = trigger.getBoundingClientRect();
   const menuWidth = 210;
-  const menuHeight = 184;
+  const menuHeight = 220;
   menu.style.left = `${Math.max(8, Math.min(window.innerWidth - menuWidth - 8, rect.right - menuWidth))}px`;
   menu.style.top = `${rect.bottom + menuHeight + 8 <= window.innerHeight ? rect.bottom + 6 : Math.max(8, rect.top - menuHeight - 6)}px`;
   menu.addEventListener('click', ev => {
@@ -261,10 +263,43 @@ function openConnectorActionMenu(event, connectorId, trigger) {
     if (action === 'vpn') downloadConnectorVpn(connectorId);
     if (action === 'ruijie-lan') collectRuijieLanInventory(connectorId);
     if (action === 'ruijie-vpn') openRuijieVpnModal(connectorId);
+    if (action === 'router-winbox') openConnectorWinbox(connectorId);
     if (action === 'pc-agent') downloadPcAgent();
     if (action === 'delete') deleteConnector(connectorId);
   });
   lucide.createIcons();
+}
+
+// IP do proprio MikroTik do conector: o endereco dele no tunel WireGuard
+// (tunnel.client_address, ex. 10.201.0.17/31). A API autoriza esse IP pro
+// tenant dono do conector e o alcanca pelo IP virtual (vnat).
+function connectorRouterIp(connectorId) {
+  const row = connectorById(connectorId) || {};
+  const addr = String(row?.tunnel?.client_address || '').trim();
+  return addr.split('/')[0].trim();
+}
+
+// Winbox nao e web: abre o tunel ate a 8291 e entrega o endereco local pra
+// colar no Winbox (o mesmo 127.0.0.1:porta que antes exigia um ssh -L na mao).
+async function openConnectorWinbox(connectorId) {
+  const ip = connectorRouterIp(connectorId);
+  if (!ip) {
+    showToast('Este conector nao tem IP de tunel (VPN) configurado.', true);
+    return;
+  }
+  let aberto = null;
+  try {
+    aberto = await deviceTunnelOpen(ip, 8291);
+  } catch (err) {
+    aberto = null;
+  }
+  if (!aberto) {
+    showToast('Agente do PC nao respondeu. Baixe e execute o agente (menu do conector).', true);
+    return;
+  }
+  const endereco = `127.0.0.1:${aberto.port}`;
+  try { await navigator.clipboard.writeText(endereco); } catch (err) { /* sem clipboard: so mostra */ }
+  showToast(`Winbox: conecte em ${endereco} (copiado)`);
 }
 
 function downloadPcAgent() {

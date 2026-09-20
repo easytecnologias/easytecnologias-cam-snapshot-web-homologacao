@@ -296,6 +296,15 @@ def _public_connector(row: Dict[str, Any], include_token: bool = False) -> Dict[
         out.pop("token", None)
     out.pop("password_enc", None)
     out.pop("vpn_password_enc", None)
+    # A chave privada do WireGuard NAO pode sair na listagem: ela so existe pra
+    # gerar o script do RouterOS (rota propria, download explicito). `out` e
+    # copia rasa, entao o bloco tunnel tem que ser copiado antes do pop -- senao
+    # o pop apagaria a chave do registro em memoria e quebraria o script.
+    tunnel = out.get("tunnel")
+    if isinstance(tunnel, dict):
+        tunnel = dict(tunnel)
+        tunnel.pop("client_private_key", None)
+        out["tunnel"] = tunnel
     return out
 
 

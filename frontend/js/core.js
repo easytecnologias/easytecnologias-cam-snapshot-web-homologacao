@@ -14,6 +14,34 @@ let _currentView = 'dashboard';
 // reconstrucao). Senao, cai no proxy antigo -- sem regressao. localhost e
 // contexto seguro, entao o fetch http a partir do https e permitido.
 const SIGHTOPS_AGENT_URL = 'http://127.0.0.1:47600';
+// Abre um tunel do agente ate <ip>:<port> e devolve { url, port } locais
+// (127.0.0.1:porta), ou null se o agente nao estiver rodando/recusar. Serve
+// tanto pra web (navegador) quanto pra porta nao-web, como o Winbox (8291).
+async function deviceTunnelOpen(ip, port) {
+  ip = String(ip || '').trim();
+  if (!ip) return null;
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 2500);
+    const r = await fetch(`${SIGHTOPS_AGENT_URL}/health`, { signal: ctrl.signal });
+    clearTimeout(t);
+    const health = r.ok ? await r.json() : null;
+    if (!health || !health.ok) return null;
+  } catch (e) { return null; }
+  // O cookie de sessao e httponly (JS nao le); pega um token curto pro agente.
+  let token = _token || '';
+  if (!token) {
+    const tr = await apiJson('/api/auth/agent-token', { cacheTtl: 0, forceRefresh: true }).catch(() => null);
+    token = (tr && tr.token) || '';
+  }
+  const wsbase = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host;
+  const q = `wsbase=${encodeURIComponent(wsbase)}&ip=${encodeURIComponent(ip)}`
+    + `&port=${encodeURIComponent(port || 80)}&token=${encodeURIComponent(token)}`;
+  const res = await fetch(`${SIGHTOPS_AGENT_URL}/open?${q}`);
+  const data = await res.json();
+  return (data && data.ok && data.url) ? data : null;
+}
+
 async function openDeviceWeb(ip, port) {
   ip = String(ip || '').trim();
   if (!ip) return;
@@ -363,6 +391,8 @@ const VIEW_META = {
   'access-messenger': { title: 'Messenger', sub: 'Conversas de WhatsApp enviadas e recebidas' },
   'access-whatsapp-triage': { title: 'Triagem WhatsApp', sub: 'Fila de cadastros recebidos por grupos' },
   'access-control': { title: 'Controle de Acesso', sub: 'Reconhecimento facial e eventos de entrada e saida' },
+  'alert-live':     { title: 'Alerta ao Vivo', sub: 'Pedidos de ajuda do botao de panico' },
+  'alert-members':  { title: 'Pessoas do Alerta', sub: 'Quem usa o app de panico' },
   'net-operate':   { title: 'Manutencao - Operacoes', sub: 'Ferramentas de diagnostico de rede' },
   planning:        { title: 'Projetos de CFTV', sub: 'Planejamento antes da implantacao' },
   'deploy-olt':    { title: 'Implantacao - OLT', sub: 'Cadastro das OLTs usadas na operacao' },
@@ -402,6 +432,8 @@ const VIEW_ID_MAP = {
   'access-messenger': 'viewAccessMessenger',
   'access-whatsapp-triage': 'viewAccessWhatsappTriage',
   'access-control':  'viewAccessControl',
+  'alert-live':      'viewAlertLive',
+  'alert-members':   'viewAlertMembers',
   'net-operate':    'viewNetOperate',
   planning:         'viewPlanning',
   'deploy-olt':     'viewDeployOlt',
@@ -475,6 +507,8 @@ function loadView(view) {
     case 'access-messenger': loadAccessMessenger(); break;
     case 'access-whatsapp-triage': loadAccessWhatsappTriage(); break;
     case 'access-control': loadAccessControl(); break;
+    case 'alert-live':     loadAlertLive();     break;
+    case 'alert-members':  loadAlertMembers();  break;
     case 'olt':         loadOlt();          break;
     case 'switch':      loadSwitch();       break;
     case 'kmz':         loadKmz();          break;

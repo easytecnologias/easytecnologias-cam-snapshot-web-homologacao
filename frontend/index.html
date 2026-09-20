@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css?v=284">
+  <link rel="stylesheet" href="styles.css?v=1789810800">
 </head>
 <body>
 
@@ -107,6 +107,11 @@
         <button class="nav-item" data-view="access-messenger"><i data-lucide="message-circle"></i><span>Messenger</span></button>
         <button class="nav-item" data-view="access-control"><i data-lucide="scan-face"></i><span>Controle de Acesso</span></button>
         <button class="nav-item nav-item-hidden" data-view="access-whatsapp-triage"><i data-lucide="inbox"></i><span>Triagem WhatsApp</span></button>
+
+        <!-- Alerta (botao de panico) -->
+        <div class="nav-section-label">Alerta</div>
+        <button class="nav-item" data-view="alert-live"><i data-lucide="siren"></i><span>Alerta ao Vivo</span><span class="alert-nav-badge" id="alertNavBadge" hidden>0</span></button>
+        <button class="nav-item" data-view="alert-members"><i data-lucide="contact"></i><span>Pessoas do Alerta</span></button>
 
         </div>
 
@@ -1547,6 +1552,209 @@
           </section>
         </div>
       </section>
+
+      <!-- --- VIEW: ALERTA AO VIVO --- -->
+      <section class="workspace hidden alert-live-view" id="viewAlertLive">
+        <div class="page-heading">
+          <div>
+            <p class="eyebrow">Alerta</p>
+            <h1>Alerta ao Vivo</h1>
+            <p>Pedidos de ajuda enviados pelo botao de panico, com localizacao e cameras proximas.</p>
+          </div>
+          <div class="page-heading-actions">
+            <button class="secondary-action" id="btnAlertSoundTest" type="button"><i data-lucide="megaphone"></i> Testar som</button>
+            <button class="secondary-action" id="btnAlertSound" type="button"><i data-lucide="sliders-horizontal"></i> <span>Som do alerta</span></button>
+            <button class="secondary-action" id="btnAlertHistory" type="button"><i data-lucide="history"></i> <span>Historico</span></button>
+            <button class="secondary-action" id="btnAlertRefresh" type="button"><i data-lucide="refresh-cw"></i> Atualizar</button>
+          </div>
+        </div>
+
+        <div class="metrics alert-live-kpis">
+          <article>
+            <div class="metric-icon red"><i data-lucide="siren"></i></div>
+            <div><span>Sem atendimento</span><strong id="alertKpiNew">0</strong><small>ninguem assumiu ainda</small></div>
+          </article>
+          <article>
+            <div class="metric-icon amber"><i data-lucide="shield-alert"></i></div>
+            <div><span>Em atendimento</span><strong id="alertKpiOpen">0</strong><small>assumidos ou a caminho</small></div>
+          </article>
+          <article>
+            <div class="metric-icon red"><i data-lucide="user-x"></i></div>
+            <div><span>Coacao</span><strong id="alertKpiDuress">0</strong><small>senha de coacao usada</small></div>
+          </article>
+          <article>
+            <div class="metric-icon green"><i data-lucide="check-circle-2"></i></div>
+            <div><span>Encerrados</span><strong id="alertKpiClosed">0</strong><small id="alertKpiClosedSub">ultimos 30 minutos</small></div>
+          </article>
+        </div>
+
+        <div class="alert-live-grid">
+          <section class="panel alert-live-list-panel">
+            <div class="panel-header">
+              <div><h2 id="alertListTitle">Alertas</h2><p id="alertListSub">Abertos e encerrados recentes.</p></div>
+              <span class="pill neutral" id="alertLiveState">aguardando</span>
+            </div>
+            <div class="alert-live-list" id="alertLiveList">
+              <div class="alert-live-empty">Carregando alertas.</div>
+            </div>
+          </section>
+
+          <section class="panel alert-live-map-panel">
+            <div id="alertLiveMap" class="alert-live-map"></div>
+          </section>
+
+          <section class="panel alert-live-detail-panel" id="alertLiveDetail" hidden></section>
+        </div>
+      </section>
+
+      <!-- --- VIEW: PESSOAS DO ALERTA --- -->
+      <section class="workspace hidden" id="viewAlertMembers">
+        <div class="page-heading">
+          <div>
+            <p class="eyebrow">Alerta</p>
+            <h1>Pessoas do Alerta</h1>
+            <p>Quem pode usar o botao de panico no celular. Gere o codigo de ativacao e entregue para a pessoa.</p>
+          </div>
+          <div class="page-heading-actions">
+            <label class="search-box"><i data-lucide="search"></i><input id="alertMembersSearch" type="search" placeholder="Buscar nome, CPF, lotacao"></label>
+            <button class="secondary-action" id="btnAlertAppOpen" type="button"><i data-lucide="smartphone"></i> Abrir o app</button>
+            <button class="primary-action" id="btnAlertMemberNew" type="button"><i data-lucide="user-plus"></i> Nova pessoa</button>
+          </div>
+        </div>
+        <section class="panel">
+          <div class="alert-table-wrap">
+            <table class="data-table alert-members-table">
+              <colgroup><col style="width:22%"><col style="width:120px"><col style="width:13%"><col style="width:18%"><col style="width:130px"><col style="width:150px"><col style="width:90px"><col style="width:230px"></colgroup>
+              <thead>
+                <tr><th>Nome</th><th>CPF</th><th>Cargo</th><th>Lotacao</th><th>Telefone</th><th>App</th><th>Situacao</th><th></th></tr>
+              </thead>
+              <tbody id="alertMembersBody"><tr class="empty-row"><td colspan="8">Carregando.</td></tr></tbody>
+            </table>
+          </div>
+        </section>
+
+        <div id="modalAlertMember" class="modal-backdrop hidden">
+          <div class="modal alert-member-modal">
+            <div class="modal-header">
+              <div><h2 id="alertMemberModalTitle">Nova pessoa</h2><p>Os dados aparecem para a central quando a pessoa pedir ajuda.</p></div>
+              <button class="icon-button" data-alert-close="modalAlertMember" type="button" aria-label="Fechar"><i data-lucide="x"></i></button>
+            </div>
+            <div class="modal-body">
+              <input type="hidden" id="alertMemberId">
+              <div class="form-row">
+                <div class="form-group"><label for="alertMemberName">Nome completo</label><input id="alertMemberName" maxlength="160"></div>
+                <div class="form-group"><label for="alertMemberCpf">CPF</label><input id="alertMemberCpf" inputmode="numeric" maxlength="14" placeholder="000.000.000-00"></div>
+              </div>
+              <div class="form-row">
+                <div class="form-group"><label for="alertMemberRole">Cargo</label><input id="alertMemberRole" maxlength="120" placeholder="Professora, merendeira, vigia..."></div>
+                <div class="form-group"><label for="alertMemberPhone">Telefone</label><input id="alertMemberPhone" maxlength="20" placeholder="(82) 99999-0000"></div>
+              </div>
+              <div class="form-row">
+                <div class="form-group"><label for="alertMemberUnit">Lotacao (escola / predio)</label><input id="alertMemberUnit" maxlength="160"></div>
+                <div class="form-group"><label for="alertMemberConnector">Local monitorado (cameras)</label>
+                  <select id="alertMemberConnector"><option value="">Nenhum</option></select></div>
+              </div>
+              <p class="inline-help">No alerta, a central ve todas as cameras do local monitorado, mesmo sem GPS e mesmo que as cameras nao tenham coordenada.</p>
+              <div class="form-row">
+                <div class="form-group"><label for="alertMemberLat">Latitude da lotacao</label><input id="alertMemberLat" placeholder="-10.18" inputmode="decimal"></div>
+                <div class="form-group"><label for="alertMemberLon">Longitude da lotacao</label><input id="alertMemberLon" placeholder="-36.82" inputmode="decimal"></div>
+              </div>
+              <p class="inline-help">A coordenada da lotacao e usada quando o GPS do celular falha (comum dentro de predio). Dica: cole "-10.18, -36.82" do Google Maps no campo de latitude.</p>
+              <div class="form-group"><label for="alertMemberNotes">Observacoes para a central</label><textarea id="alertMemberNotes" rows="2" maxlength="1000"></textarea></div>
+              <label class="alert-check"><input type="checkbox" id="alertMemberActive" checked> Cadastro ativo (desativar bloqueia o app na hora)</label>
+            </div>
+            <div class="modal-actions">
+              <button class="secondary-action" data-alert-close="modalAlertMember" type="button"><i data-lucide="x"></i> Cancelar</button>
+              <button class="primary-action" id="btnAlertMemberSave" type="button"><i data-lucide="save"></i> Salvar</button>
+            </div>
+          </div>
+        </div>
+
+        <div id="modalAlertCode" class="modal-backdrop hidden">
+          <div class="modal">
+            <div class="modal-header">
+              <div><h2>Codigo de ativacao</h2><p id="alertCodeWho"></p></div>
+              <button class="icon-button" data-alert-close="modalAlertCode" type="button" aria-label="Fechar"><i data-lucide="x"></i></button>
+            </div>
+            <div class="modal-body">
+              <div class="alert-code" id="alertCodeValue">----</div>
+              <p class="inline-help">Entregue este codigo para a pessoa digitar no app. Vale uma unica vez, ate <b id="alertCodeExpires"></b>. Ele nao aparece de novo depois que esta janela fechar.</p>
+            </div>
+            <div class="modal-actions">
+              <button class="secondary-action" id="btnAlertCodeCopy" type="button"><i data-lucide="copy"></i> Copiar</button>
+              <button class="primary-action" data-alert-close="modalAlertCode" type="button"><i data-lucide="check"></i> Pronto</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <div id="modalAlertSound" class="modal-backdrop hidden">
+        <div class="modal alert-sound-modal">
+          <div class="modal-header">
+            <div><h2>Som do alerta</h2><p>Vale so para este computador. Cada posto da central escolhe o seu.</p></div>
+            <button class="icon-button" data-alert-close="modalAlertSound" type="button" aria-label="Fechar"><i data-lucide="x"></i></button>
+          </div>
+          <div class="modal-body">
+            <label class="alert-check"><input type="checkbox" id="alertSoundEnabled"> Tocar som quando chegar alerta</label>
+            <div class="form-row">
+              <div class="form-group"><label for="alertSoundSiren">Sirene</label><select id="alertSoundSiren"></select></div>
+              <div class="form-group"><label for="alertSoundVoice">Voz</label><select id="alertSoundVoice"></select></div>
+            </div>
+            <div class="form-row alert-sound-row3">
+              <div class="form-group"><label for="alertSoundRate">Velocidade da voz</label>
+                <select id="alertSoundRate"><option value="0.85">Devagar</option><option value="1">Normal</option><option value="1.15">Rapida</option></select></div>
+              <div class="form-group"><label for="alertSoundRepeat">Repetir a voz a cada</label>
+                <select id="alertSoundRepeat"><option value="10">10 segundos</option><option value="15">15 segundos</option><option value="30">30 segundos</option><option value="60">1 minuto</option></select></div>
+              <div class="form-group"><label for="alertSoundVolume">Volume</label><input id="alertSoundVolume" type="range" min="10" max="100" step="5"></div>
+            </div>
+            <div class="form-group"><label for="alertSoundTextPanic">O que a voz fala no alerta</label><input id="alertSoundTextPanic" maxlength="200"></div>
+            <div class="form-group"><label for="alertSoundTextDuress">O que a voz fala na coacao</label><input id="alertSoundTextDuress" maxlength="200"></div>
+            <p class="inline-help">Use <b>{nome}</b> para o nome da pessoa e <b>{local}</b> para a lotacao. A voz repete ate alguem clicar em Assumir.</p>
+            <div class="alert-notify-box">
+              <div><b>Aviso do Windows</b><span id="alertNotifyStatus">-</span>
+                <small>Balao no canto da tela quando chegar alerta, mesmo com o SightOps minimizado ou em outra aba.</small></div>
+              <button class="secondary-action" id="btnAlertNotifyEnable" type="button"><i data-lucide="bell-ring"></i> Ativar</button>
+            </div>
+          </div>
+          <div class="modal-actions alert-sound-actions">
+            <button class="link-action" id="btnAlertSoundDefaults" type="button">Voltar ao padrao</button>
+            <button class="secondary-action" id="btnAlertSoundTestPanic" type="button"><i data-lucide="play"></i> Testar alerta</button>
+            <button class="secondary-action" id="btnAlertSoundTestDuress" type="button"><i data-lucide="play"></i> Testar coacao</button>
+            <button class="primary-action" id="btnAlertSoundSave" type="button"><i data-lucide="save"></i> Salvar</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="modalAlertClose" class="modal-backdrop hidden">
+        <div class="modal">
+          <div class="modal-header">
+            <div><h2>Encerrar alerta</h2><p>Registre o que foi feito. Fica no historico.</p></div>
+            <button class="icon-button" data-alert-close="modalAlertClose" type="button" aria-label="Fechar"><i data-lucide="x"></i></button>
+          </div>
+          <div class="modal-body">
+            <div class="form-group"><label for="alertCloseNote">O que aconteceu</label><textarea id="alertCloseNote" rows="4" maxlength="2000" placeholder="Ex.: viatura 03 chegou 14:32, servidora segura, ocorrencia registrada."></textarea></div>
+          </div>
+          <div class="modal-actions">
+            <button class="secondary-action" data-alert-close="modalAlertClose" type="button"><i data-lucide="x"></i> Voltar</button>
+            <button class="primary-action" id="btnAlertCloseConfirm" type="button"><i data-lucide="check-circle-2"></i> Encerrar alerta</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="modalAlertCamera" class="modal-backdrop hidden">
+        <div class="modal alert-camera-modal">
+          <div class="modal-header">
+            <div><h2 id="alertCameraTitle">Camera</h2><p id="alertCameraSub"></p></div>
+            <button class="icon-button" data-alert-close="modalAlertCamera" type="button" aria-label="Fechar"><i data-lucide="x"></i></button>
+          </div>
+          <div class="modal-body">
+            <div class="alert-camera-stage">
+              <video id="alertCameraVideo" autoplay muted playsinline></video>
+              <span class="alert-camera-status" id="alertCameraStatus">Conectando...</span>
+            </div>
+          </div>
+        </div>
+      </div>
 
       <!-- --- VIEW: TRIAGEM WHATSAPP --- -->
       <section class="workspace hidden access-triage-view" id="viewAccessWhatsappTriage">
@@ -6311,9 +6519,9 @@
        trechos do app.js original na sequencia em que estavam, entao carregar
        fora de ordem muda o comportamento. Ao adicionar um arquivo novo, entre
        antes de bootstrap.js, que e quem liga os botoes no DOMContentLoaded. -->
-  <script src="js/core.js?v=1789800100"></script>
+  <script src="js/core.js?v=1789900110"></script>
   <script src="js/dashboard.js?v=266"></script>
-  <script src="js/liveStream.js?v=271"></script>
+  <script src="js/liveStream.js?v=1789810300"></script>
   <script src="js/cameras.js?v=1789780100"></script>
   <script src="js/recorders.js?v=1789780100"></script>
   <script src="js/windows.js?v=142"></script>
@@ -6323,7 +6531,7 @@
   <script src="js/network.js?v=158"></script>
   <script src="js/deploy.js?v=1789800200"></script>
   <script src="js/deployOlt.js?v=160"></script>
-  <script src="js/connectors.js?v=1789770100"></script>
+  <script src="js/connectors.js?v=1789900100"></script>
   <script src="js/monitoring.js?v=9"></script>
   <script src="js/planning.js?v=69"></script>
   <script src="js/helpers.js?v=144"></script>
@@ -6331,6 +6539,7 @@
   <script src="js/accessLive.js?v=1789750400"></script>
   <script src="js/accessWhatsappTriage.js?v=3"></script>
   <script src="js/messenger.js?v=5"></script>
+  <script src="js/alert.js?v=1789810800"></script>
   <script src="js/bootstrap.js?v=272"></script>
 </body>
 </html>

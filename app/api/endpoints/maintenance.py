@@ -101,7 +101,12 @@ def _ip_belongs_to_current_tenant(ip: str) -> bool:
     OUTRO cliente so sabendo o IP -- faixas privadas se repetem entre
     tenants neste sistema (mesmo raciocinio de _ip_in_inventory em
     cameras.py, agora cobrindo tambem o inventario de gravador)."""
-    return _ip_in_inventory(ip) or _host_in_recorder_inventory(ip)
+    return (
+        _ip_in_inventory(ip)
+        or _host_in_recorder_inventory(ip)
+        # o MikroTik do proprio conector (IP do tunel) tambem e "do tenant"
+        or bool(_connector_tunnel_ip_owner(ip))
+    )
 
 
 def _device_http_port(ip: str) -> int:
@@ -407,6 +412,25 @@ def _bool_ok(resp: requests.Response | None) -> bool:
     return resp.status_code in (200, 201, 202, 204)
 
 
+def _connector_tunnel_ip_owner(ip: str) -> str:
+    """Conector cujo PROPRIO MikroTik atende neste IP (o client_address do
+    tunnel WireGuard, ex. 10.201.0.17/31). So olha conectores visiveis pro
+    tenant atual -- e o que autoriza abrir a web do roteador sem deixar um
+    tenant alcancar o roteador de outro."""
+    alvo = str(ip or "").strip()
+    if not alvo:
+        return ""
+    try:
+        from app.services.connector_service import list_connectors
+        for row in (list_connectors().get("connectors") or []):
+            addr = str(((row.get("tunnel") or {}).get("client_address")) or "").strip()
+            if addr.split("/")[0].strip() == alvo:
+                return str(row.get("id") or "").strip()
+    except Exception:
+        return ""
+    return ""
+
+
 def _connector_for(ip: str, hint: str = "") -> str:
     """Conector de uma camera: usa o hint (do request) se vier, senao resolve do
     inventario (a linha guarda remote_connector_id). Com dois clientes de MESMO
@@ -415,7 +439,9 @@ def _connector_for(ip: str, hint: str = "") -> str:
     if hint:
         return hint
     row = _camera_row_for_ip(str(ip or "").strip()) or {}
-    return str(row.get("remote_connector_id") or row.get("connector_id") or "").strip()
+    cid = str(row.get("remote_connector_id") or row.get("connector_id") or "").strip()
+    # Nao e camera: pode ser o proprio MikroTik do conector (IP do tunel).
+    return cid or _connector_tunnel_ip_owner(ip)
 
 
 def _reach(ip: str, connector_id: str = "") -> str:
