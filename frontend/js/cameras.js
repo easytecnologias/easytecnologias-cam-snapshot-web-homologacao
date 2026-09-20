@@ -1989,9 +1989,17 @@ function openCamPanel(cam) {
   stopPing();
   closeCamPanelLive();
 
-  // Destaca linha
+  // Destaca linha. A classe row-selected sozinha e quase invisivel (#f0fdf9),
+  // e vindo do dashboard a tabela rola ate a camera sem dizer qual e -- entao
+  // reforca com a cor do tema e uma barra na lateral. Inline de proposito: o
+  // styles.css tem alteracao de outro trabalho em andamento.
   document.querySelectorAll('.inv-olt-row').forEach(tr => {
-    tr.classList.toggle('row-selected', tr.dataset.key === camKey(cam));
+    const ativa = tr.dataset.key === camKey(cam);
+    tr.classList.toggle('row-selected', ativa);
+    // verde do tema (#087f5b) com opacidade: forte o bastante pra achar a
+    // linha de relance, sem comprometer a leitura do texto.
+    tr.style.background = ativa ? 'rgba(8,127,91,.28)' : '';
+    tr.style.boxShadow = ativa ? 'inset 4px 0 0 var(--primary)' : '';
   });
 
   // Preenche info
@@ -2068,7 +2076,11 @@ function closeCamPanel() {
   _invOltActive = null;
   document.getElementById('camPanelBackdrop')?.classList.add('hidden');
   document.getElementById('camPanel').classList.add('hidden');
-  document.querySelectorAll('.inv-olt-row').forEach(tr => tr.classList.remove('row-selected'));
+  document.querySelectorAll('.inv-olt-row').forEach(tr => {
+    tr.classList.remove('row-selected');
+    tr.style.background = '';
+    tr.style.boxShadow = '';
+  });
 }
 
 //  Ping Terminal
