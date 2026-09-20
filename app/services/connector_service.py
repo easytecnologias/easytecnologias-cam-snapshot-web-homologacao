@@ -667,6 +667,7 @@ def create_job(payload: Dict[str, Any]) -> Dict[str, Any]:
         "wireguard_diagnose",
         "access_http_get",
         "access_http_post",
+        "agent_upgrade",
     }:
         raise ValueError("tipo de job nao suportado neste MVP")
     with _lock:
@@ -929,6 +930,18 @@ def _routeros_job_script_template(base_url: str, connector_id: str, token: str, 
 /tool fetch url="{base_url}/api/connectors/agent/routeros/jobs/{job_id}/result-text" http-method=post http-header-field="x-sightops-connector-id:{connector_id},x-sightops-connector-token:{token},Content-Type:text/plain" http-data=$result dst-path=sightops-job-result.json;
 :put ("SightOps WireGuard instalado: " . $result);
 """
+    if job_type == "agent_upgrade":
+        # Atualiza o proprio script do agente no roteador. Usa `set source=`
+        # (substitui de uma vez) em vez de remove+add: se algo falhar, o script
+        # antigo continua valendo e o conector nao fica mudo. O scheduler nao e
+        # tocado -- ele so chama o script pelo nome.
+        source = _routeros_agent_source(base_url, connector_id, token)
+        return f""":local result "agent_upgrade:ok";
+:do {{/system script set [find name="sightops-connector"] source={{{source}}};}} on-error={{:set result "agent_upgrade:failed";}};
+/tool fetch url="{base_url}/api/connectors/agent/routeros/jobs/{job_id}/result-text" http-method=post http-header-field="x-sightops-connector-id:{connector_id},x-sightops-connector-token:{token},Content-Type:text/plain" http-data=$result dst-path=sightops-job-result.json;
+:put $result;
+"""
+
     if job_type == "wireguard_probe":
         return f""":local result "";
 :local p1 [/ping address=10.250.0.1 src-address=10.250.0.2 count=3];
@@ -1253,19 +1266,13 @@ while ($true) {{
 """
 
 
-def _routeros_script_template(base_url: str, connector_id: str, token: str) -> str:
+def _routeros_agent_source(base_url: str, connector_id: str, token: str) -> str:
+    """Corpo do script do agente (o que vai dentro de source={...}).
+
+    Isolado aqui pra ser reaproveitado pelo job agent_upgrade -- assim o
+    script colado a mao e o atualizado remotamente nunca divergem."""
     base_url = base_url.rstrip("/")
-    return f"""# SightOps RouterOS Connector MVP
-# Cole no terminal do MikroTik. Ele cria um script e um scheduler de heartbeat.
-
-:local baseUrl "{base_url}"
-:local connectorId "{connector_id}"
-:local token "{token}"
-
-/system script remove [find name="sightops-connector"] 
-/system scheduler remove [find name="sightops-connector"] 
-
-/system script add name="sightops-connector" policy=read,write,test,policy source={{\
+    return f"""\
 :local baseUrl "{base_url}";\
 :local connectorId "{connector_id}";\
 :local token "{token}";\
@@ -1289,7 +1296,23 @@ def _routeros_script_template(base_url: str, connector_id: str, token: str) -> s
 /tool fetch url=($baseUrl . "/api/connectors/agent/heartbeat") http-method=post http-header-field=("x-sightops-connector-id:" . $connectorId . ",x-sightops-connector-token:" . $token . ",Content-Type:application/json") http-data=$payload dst-path=sightops-connector-last.json;\
 /tool fetch url=($baseUrl . "/api/connectors/agent/routeros/job.rsc") http-method=get http-header-field=("x-sightops-connector-id:" . $connectorId . ",x-sightops-connector-token:" . $token) dst-path=sightops-routeros-job.rsc;\
 /import file-name=sightops-routeros-job.rsc;\
-}}
+"""
+
+
+def _routeros_script_template(base_url: str, connector_id: str, token: str) -> str:
+    base_url = base_url.rstrip("/")
+    source = _routeros_agent_source(base_url, connector_id, token)
+    return f"""# SightOps RouterOS Connector MVP
+# Cole no terminal do MikroTik. Ele cria um script e um scheduler de heartbeat.
+
+:local baseUrl "{base_url}"
+:local connectorId "{connector_id}"
+:local token "{token}"
+
+/system script remove [find name="sightops-connector"] 
+/system scheduler remove [find name="sightops-connector"] 
+
+/system script add name="sightops-connector" policy=read,write,test,policy source={{{source}}}
 
 /system scheduler add name="sightops-connector" interval=1m start-time=startup on-event="/system script run sightops-connector"
 /system script run sightops-connector
