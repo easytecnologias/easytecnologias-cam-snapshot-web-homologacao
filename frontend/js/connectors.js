@@ -288,9 +288,19 @@ function winboxPortMap() {
   catch (err) { return {}; }
 }
 
+// Ordem: o que o proprio MikroTik reportou no heartbeat (agente 0.7+), senao
+// o que foi escolhido a mao neste navegador, senao o padrao de fabrica.
+function connectorWinboxPortFromRouter(connectorId) {
+  const inv = connectorById(connectorId)?.inventory || {};
+  const desabilitado = String(inv.winbox_disabled || '').trim().toLowerCase() === 'true';
+  const porta = String(inv.winbox_port || '').trim();
+  return (porta && !desabilitado) ? porta : '';
+}
+
 function connectorWinboxPort(connectorId) {
-  const porta = String(winboxPortMap()[connectorId] || '').trim();
-  return porta || '8291';
+  return connectorWinboxPortFromRouter(connectorId)
+    || String(winboxPortMap()[connectorId] || '').trim()
+    || '8291';
 }
 
 function rememberWinboxPort(connectorId, porta) {
@@ -310,14 +320,19 @@ async function openConnectorWinbox(connectorId) {
     return;
   }
   const nome = connectorById(connectorId)?.name || 'este conector';
-  const escolhida = prompt(`Porta do Winbox em ${nome}:`, connectorWinboxPort(connectorId));
-  if (escolhida === null) return;
-  const porta = Number(String(escolhida).trim());
-  if (!Number.isInteger(porta) || porta < 1 || porta > 65535) {
-    showToast('Porta invalida.', true);
-    return;
+  // Se o roteador ja informou a porta no heartbeat, nao pergunta nada.
+  const doRouter = connectorWinboxPortFromRouter(connectorId);
+  let porta = Number(doRouter);
+  if (!doRouter) {
+    const escolhida = prompt(`Porta do Winbox em ${nome}:`, connectorWinboxPort(connectorId));
+    if (escolhida === null) return;
+    porta = Number(String(escolhida).trim());
+    if (!Number.isInteger(porta) || porta < 1 || porta > 65535) {
+      showToast('Porta invalida.', true);
+      return;
+    }
+    rememberWinboxPort(connectorId, porta);
   }
-  rememberWinboxPort(connectorId, porta);
   let aberto = null;
   try {
     aberto = await deviceTunnelOpen(ip, porta);
