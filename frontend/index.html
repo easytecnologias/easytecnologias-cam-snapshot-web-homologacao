@@ -1688,6 +1688,26 @@
         </div>
       </section>
 
+      <div id="modalWinboxPort" class="modal-backdrop hidden">
+        <div class="modal">
+          <div class="modal-header">
+            <div><h2>Acessar via Winbox</h2><p id="winboxPortWho">Conector</p></div>
+            <button class="icon-button" id="btnWinboxPortClose" type="button" aria-label="Fechar"><i data-lucide="x"></i></button>
+          </div>
+          <div class="modal-body">
+            <div class="form-group">
+              <label for="winboxPortInput">Porta do Winbox no roteador</label>
+              <input id="winboxPortInput" type="number" min="1" max="65535" inputmode="numeric" placeholder="8291">
+            </div>
+            <p class="inline-help" id="winboxPortHelp">O padrao de fabrica e 8291. Informe a porta configurada neste MikroTik -- ela fica salva para as proximas vezes.</p>
+          </div>
+          <div class="modal-actions">
+            <button class="secondary-action" id="btnWinboxPortCancel" type="button"><i data-lucide="x"></i> Cancelar</button>
+            <button class="primary-action" id="btnWinboxPortOk" type="button"><i data-lucide="terminal"></i> Abrir tunel</button>
+          </div>
+        </div>
+      </div>
+
       <div id="modalAlertSound" class="modal-backdrop hidden">
         <div class="modal alert-sound-modal">
           <div class="modal-header">
@@ -6531,7 +6551,7 @@
   <script src="js/network.js?v=158"></script>
   <script src="js/deploy.js?v=1789800200"></script>
   <script src="js/deployOlt.js?v=160"></script>
-  <script src="js/connectors.js?v=1789900300"></script>
+  <script src="js/connectors.js?v=1789900400"></script>
   <script src="js/monitoring.js?v=9"></script>
   <script src="js/planning.js?v=69"></script>
   <script src="js/helpers.js?v=144"></script>

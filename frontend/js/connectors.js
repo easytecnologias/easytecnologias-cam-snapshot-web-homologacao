@@ -311,6 +311,56 @@ function rememberWinboxPort(connectorId, porta) {
   } catch (err) { /* navegador sem storage: segue sem lembrar */ }
 }
 
+// Modal no padrao da pagina (o prompt do navegador destoava da UI).
+// Resolve com a porta escolhida, ou com 0 se cancelar.
+function askWinboxPort(nome, padrao) {
+  return new Promise(resolve => {
+    const back = document.getElementById('modalWinboxPort');
+    const input = document.getElementById('winboxPortInput');
+    const quem = document.getElementById('winboxPortWho');
+    const btnOk = document.getElementById('btnWinboxPortOk');
+    const btnCancel = document.getElementById('btnWinboxPortCancel');
+    const btnClose = document.getElementById('btnWinboxPortClose');
+    if (!back || !input || !btnOk) { resolve(Number(padrao) || 0); return; }
+
+    if (quem) quem.textContent = nome;
+    input.value = padrao || '8291';
+    back.classList.remove('hidden');
+    lucide.createIcons();
+    setTimeout(() => { input.focus(); input.select(); }, 30);
+
+    const fechar = (valor) => {
+      back.classList.add('hidden');
+      btnOk.removeEventListener('click', onOk);
+      btnCancel?.removeEventListener('click', onCancel);
+      btnClose?.removeEventListener('click', onCancel);
+      back.removeEventListener('mousedown', onFundo);
+      document.removeEventListener('keydown', onTecla);
+      resolve(valor);
+    };
+    const onOk = () => {
+      const n = Number(String(input.value || '').trim());
+      if (!Number.isInteger(n) || n < 1 || n > 65535) {
+        showToast('Porta invalida. Use um numero de 1 a 65535.', true);
+        input.focus();
+        return;
+      }
+      fechar(n);
+    };
+    const onCancel = () => fechar(0);
+    const onFundo = (ev) => { if (ev.target === back) fechar(0); };
+    const onTecla = (ev) => {
+      if (ev.key === 'Escape') fechar(0);
+      if (ev.key === 'Enter' && !back.classList.contains('hidden')) { ev.preventDefault(); onOk(); }
+    };
+    btnOk.addEventListener('click', onOk);
+    btnCancel?.addEventListener('click', onCancel);
+    btnClose?.addEventListener('click', onCancel);
+    back.addEventListener('mousedown', onFundo);
+    document.addEventListener('keydown', onTecla);
+  });
+}
+
 // Winbox nao e web: abre o tunel ate a porta do Winbox e entrega o endereco
 // local pra colar (o mesmo 127.0.0.1:porta que antes exigia um ssh -L na mao).
 async function openConnectorWinbox(connectorId) {
@@ -324,13 +374,8 @@ async function openConnectorWinbox(connectorId) {
   const doRouter = connectorWinboxPortFromRouter(connectorId);
   let porta = Number(doRouter);
   if (!doRouter) {
-    const escolhida = prompt(`Porta do Winbox em ${nome}:`, connectorWinboxPort(connectorId));
-    if (escolhida === null) return;
-    porta = Number(String(escolhida).trim());
-    if (!Number.isInteger(porta) || porta < 1 || porta > 65535) {
-      showToast('Porta invalida.', true);
-      return;
-    }
+    porta = await askWinboxPort(nome, connectorWinboxPort(connectorId));
+    if (!porta) return;
     rememberWinboxPort(connectorId, porta);
   }
   let aberto = null;
