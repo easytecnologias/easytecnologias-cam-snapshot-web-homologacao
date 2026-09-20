@@ -1948,6 +1948,8 @@ function renderInvOlt(cameras) {
     }
   }
 
+  destacarLinhaCamAtiva();  // a tabela foi redesenhada: repoe a marcacao
+
   document.getElementById('chkOltAll').onchange = function() {
     document.querySelectorAll('.chk-olt').forEach(c => c.checked = this.checked);
   };
@@ -1984,23 +1986,30 @@ function cameraOnuHealth(cam = {}) {
 }
 
 //  Painel lateral da camera
+// Marca a linha da camera aberta no painel. Le sempre de _invOltActive, pra
+// poder ser REAPLICADA a cada render: a tabela e redesenhada (filtro, busca,
+// atualizacao do inventario) e recriava as linhas sem a marcacao -- era o
+// "as vezes fica, as vezes nao".
+//
+// A classe row-selected sozinha e quase invisivel (#f0fdf9, branco na
+// pratica), entao reforca com o verde do tema e uma barra na lateral. Inline
+// de proposito: o styles.css tem alteracao de outro trabalho em andamento.
+function destacarLinhaCamAtiva() {
+  const chave = _invOltActive ? camKey(_invOltActive) : null;
+  document.querySelectorAll('.inv-olt-row').forEach(tr => {
+    const ativa = !!chave && tr.dataset.key === chave;
+    tr.classList.toggle('row-selected', ativa);
+    tr.style.background = ativa ? 'rgba(8,127,91,.28)' : '';
+    tr.style.boxShadow = ativa ? 'inset 4px 0 0 var(--primary)' : '';
+  });
+}
+
 function openCamPanel(cam) {
   _invOltActive = cam;
   stopPing();
   closeCamPanelLive();
 
-  // Destaca linha. A classe row-selected sozinha e quase invisivel (#f0fdf9),
-  // e vindo do dashboard a tabela rola ate a camera sem dizer qual e -- entao
-  // reforca com a cor do tema e uma barra na lateral. Inline de proposito: o
-  // styles.css tem alteracao de outro trabalho em andamento.
-  document.querySelectorAll('.inv-olt-row').forEach(tr => {
-    const ativa = tr.dataset.key === camKey(cam);
-    tr.classList.toggle('row-selected', ativa);
-    // verde do tema (#087f5b) com opacidade: forte o bastante pra achar a
-    // linha de relance, sem comprometer a leitura do texto.
-    tr.style.background = ativa ? 'rgba(8,127,91,.28)' : '';
-    tr.style.boxShadow = ativa ? 'inset 4px 0 0 var(--primary)' : '';
-  });
+  destacarLinhaCamAtiva();
 
   // Preenche info
   const statusColor = cam.status === 'online' ? 'var(--primary)' : cam.status === 'offline' ? 'var(--danger)' : 'var(--amber)';
@@ -2076,11 +2085,7 @@ function closeCamPanel() {
   _invOltActive = null;
   document.getElementById('camPanelBackdrop')?.classList.add('hidden');
   document.getElementById('camPanel').classList.add('hidden');
-  document.querySelectorAll('.inv-olt-row').forEach(tr => {
-    tr.classList.remove('row-selected');
-    tr.style.background = '';
-    tr.style.boxShadow = '';
-  });
+  destacarLinhaCamAtiva();  // _invOltActive ja e null: limpa tudo
 }
 
 //  Ping Terminal
