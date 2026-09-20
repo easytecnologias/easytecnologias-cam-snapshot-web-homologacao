@@ -279,17 +279,48 @@ function connectorRouterIp(connectorId) {
   return addr.split('/')[0].trim();
 }
 
-// Winbox nao e web: abre o tunel ate a 8291 e entrega o endereco local pra
-// colar no Winbox (o mesmo 127.0.0.1:porta que antes exigia um ssh -L na mao).
+// A porta do Winbox varia por roteador (o padrao 8291 quase sempre e trocado),
+// entao ela e perguntada uma vez por conector e fica lembrada neste navegador.
+const WINBOX_PORT_KEY = 'sightops.winboxPort';
+
+function winboxPortMap() {
+  try { return JSON.parse(localStorage.getItem(WINBOX_PORT_KEY) || '{}') || {}; }
+  catch (err) { return {}; }
+}
+
+function connectorWinboxPort(connectorId) {
+  const porta = String(winboxPortMap()[connectorId] || '').trim();
+  return porta || '8291';
+}
+
+function rememberWinboxPort(connectorId, porta) {
+  try {
+    const mapa = winboxPortMap();
+    mapa[connectorId] = String(porta);
+    localStorage.setItem(WINBOX_PORT_KEY, JSON.stringify(mapa));
+  } catch (err) { /* navegador sem storage: segue sem lembrar */ }
+}
+
+// Winbox nao e web: abre o tunel ate a porta do Winbox e entrega o endereco
+// local pra colar (o mesmo 127.0.0.1:porta que antes exigia um ssh -L na mao).
 async function openConnectorWinbox(connectorId) {
   const ip = connectorRouterIp(connectorId);
   if (!ip) {
     showToast('Este conector nao tem IP de tunel (VPN) configurado.', true);
     return;
   }
+  const nome = connectorById(connectorId)?.name || 'este conector';
+  const escolhida = prompt(`Porta do Winbox em ${nome}:`, connectorWinboxPort(connectorId));
+  if (escolhida === null) return;
+  const porta = Number(String(escolhida).trim());
+  if (!Number.isInteger(porta) || porta < 1 || porta > 65535) {
+    showToast('Porta invalida.', true);
+    return;
+  }
+  rememberWinboxPort(connectorId, porta);
   let aberto = null;
   try {
-    aberto = await deviceTunnelOpen(ip, 8291);
+    aberto = await deviceTunnelOpen(ip, porta);
   } catch (err) {
     aberto = null;
   }
@@ -299,7 +330,7 @@ async function openConnectorWinbox(connectorId) {
   }
   const endereco = `127.0.0.1:${aberto.port}`;
   try { await navigator.clipboard.writeText(endereco); } catch (err) { /* sem clipboard: so mostra */ }
-  showToast(`Winbox: conecte em ${endereco} (copiado)`);
+  showToast(`Winbox: conecte em ${endereco} (copiado) -- porta ${porta} do roteador`);
 }
 
 function downloadPcAgent() {
