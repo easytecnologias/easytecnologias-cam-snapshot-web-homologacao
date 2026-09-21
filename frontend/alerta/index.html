@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+  <meta name="theme-color" content="#0f1115">
+  <title>SightOps Alerta</title>
+  <link rel="stylesheet" href="app.css?v=2">
+</head>
+<body>
+  <main id="app">
+
+    <!-- 1. Ativacao -->
+    <section class="screen" id="scrActivate" hidden>
+      <div class="brand"><span class="brand-dot"></span>SightOps Alerta</div>
+      <h1>Ativar aparelho</h1>
+      <p class="muted">Digite o código de ativação que a central entregou para você.</p>
+      <form id="formActivate" autocomplete="off">
+        <input id="inCode" class="code-input" maxlength="9" placeholder="XXXX-XXXX" autocapitalize="characters" spellcheck="false" required>
+        <button class="btn primary" type="submit">Ativar</button>
+      </form>
+      <p class="form-error" id="errActivate"></p>
+    </section>
+
+    <!-- 2. Senhas -->
+    <section class="screen" id="scrPins" hidden>
+      <div class="brand"><span class="brand-dot"></span>SightOps Alerta</div>
+      <h1 id="pinsTitle">Crie suas senhas</h1>
+      <p class="muted">Você vai usar uma delas para <b>cancelar</b> um alerta.</p>
+      <form id="formPins" autocomplete="off">
+        <label id="lblCurrentPin" hidden>Senha atual
+          <input id="inCurrentPin" type="password" inputmode="numeric" pattern="\d*" maxlength="8">
+        </label>
+        <label>Senha normal (4 a 8 números)
+          <input id="inPin" type="password" inputmode="numeric" pattern="\d*" maxlength="8" required>
+        </label>
+        <label>Repita a senha normal
+          <input id="inPin2" type="password" inputmode="numeric" pattern="\d*" maxlength="8" required>
+        </label>
+        <div class="duress-box">
+          <b>Senha de coação</b>
+          <p>Se alguém te obrigar a cancelar o alerta, digite esta senha. O celular vai mostrar
+          "cancelado", mas a central recebe um aviso de <b>coação</b> e continua vendo onde você está.</p>
+        </div>
+        <label>Senha de coação (diferente da normal)
+          <input id="inDuress" type="password" inputmode="numeric" pattern="\d*" maxlength="8" required>
+        </label>
+        <label>Repita a senha de coação
+          <input id="inDuress2" type="password" inputmode="numeric" pattern="\d*" maxlength="8" required>
+        </label>
+        <button class="btn primary" type="submit">Salvar senhas</button>
+        <button class="btn ghost" type="button" id="btnPinsBack" hidden>Voltar</button>
+      </form>
+      <p class="form-error" id="errPins"></p>
+    </section>
+
+    <!-- 3. Inicio -->
+    <section class="screen home" id="scrHome" hidden>
+      <header class="home-head">
+        <div>
+          <div class="who" id="homeName">-</div>
+          <div class="muted small" id="homeUnit"></div>
+        </div>
+        <button class="icon-btn" id="btnMenu" aria-label="Configurações">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg>
+        </button>
+      </header>
+
+      <div class="panic-wrap">
+        <button class="panic" id="btnPanic" aria-label="Segure para pedir ajuda">
+          <svg class="ring" viewBox="0 0 120 120"><circle cx="60" cy="60" r="56" pathLength="100"/></svg>
+          <span class="panic-label">SOCORRO</span>
+        </button>
+        <p class="panic-hint" id="panicHint">Segure o botão por 2 segundos</p>
+      </div>
+
+      <footer class="home-foot">
+        <span class="gps-dot" id="gpsDot"></span><span id="gpsText">Localização só é enviada durante um alerta</span>
+      </footer>
+    </section>
+
+    <!-- 4. Alerta ativo -->
+    <section class="screen alarm" id="scrAlarm" hidden>
+      <div class="alarm-pulse"></div>
+      <h1>Alerta enviado</h1>
+      <p class="alarm-status" id="alarmStatus">Enviando...</p>
+      <ul class="alarm-facts">
+        <li><span>Localização</span><b id="alarmGps">aguardando GPS</b></li>
+        <li><span>Última atualização</span><b id="alarmLast">-</b></li>
+      </ul>
+      <p class="muted small center">Mantenha o celular com você. A central está vendo onde você está.</p>
+      <button class="btn outline" id="btnCancelAlarm">Cancelar alerta</button>
+    </section>
+
+    <!-- 5. Cancelado (igual para senha normal e coacao) -->
+    <section class="screen done" id="scrCancelled" hidden>
+      <div class="check">✓</div>
+      <h1>Alerta cancelado</h1>
+      <p class="muted">A central foi informada.</p>
+    </section>
+
+    <!-- Teclado da senha -->
+    <div class="sheet" id="pinSheet" hidden>
+      <div class="sheet-card">
+        <h2>Digite sua senha</h2>
+        <div class="pin-dots" id="pinDots"></div>
+        <p class="form-error center" id="errPinSheet"></p>
+        <div class="keypad" id="keypad"></div>
+        <button class="btn ghost" id="btnPinCancel">Voltar</button>
+      </div>
+    </div>
+
+    <!-- Menu -->
+    <div class="sheet" id="menuSheet" hidden>
+      <div class="sheet-card">
+        <h2>Configurações</h2>
+        <button class="btn outline" id="btnChangePins">Trocar senhas</button>
+        <button class="btn outline" id="btnTestGps">Testar localização</button>
+        <p class="muted small center" id="testGpsResult"></p>
+        <button class="btn danger-ghost" id="btnLogout">Desativar este aparelho</button>
+        <button class="btn ghost" id="btnMenuClose">Fechar</button>
+        <p class="muted tiny center">SightOps Alerta v0.2</p>
+      </div>
+    </div>
+
+  </main>
+  <script src="app.js?v=2"></script>
+</body>
+</html>
