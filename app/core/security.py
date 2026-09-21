@@ -21,6 +21,8 @@ ROLE_RANK = {
 
 
 class ApiAuthMiddleware(BaseHTTPMiddleware):
+    _WRITE_METHODS = ("POST", "PUT", "PATCH", "DELETE")
+
     def __init__(self, app, settings: AppSettings) -> None:
         super().__init__(app)
         self.settings = settings
@@ -92,7 +94,10 @@ class ApiAuthMiddleware(BaseHTTPMiddleware):
             (("POST",), "/api/cameras/ptz_move", "operator"),
             (("POST",), "/api/cameras/reboot", "operator"),
             (("POST",), "/api/cameras/rename", "operator"),
-            (("POST",), "/api/maintenance/", "operator"),
+            # O proxy web repassa o metodo do dispositivo (PUT/PATCH/DELETE
+            # inclusive), nao so POST -- com o default virando NEGAR, cobrir
+            # so POST quebraria o acesso web a camera/gravador.
+            (("POST", "PUT", "PATCH", "DELETE"), "/api/maintenance/", "operator"),
             (("POST",), "/api/dvr/", "operator"),
             (("POST",), "/api/nvr/", "operator"),
             (("POST",), "/api/ia/", "operator"),
@@ -129,6 +134,11 @@ class ApiAuthMiddleware(BaseHTTPMiddleware):
             (("PATCH", "DELETE"), "/api/kmz/", "operator"),
             (("PATCH",), "/api/windows/", "operator"),
             (("DELETE",), "/api/olt/", "operator"),
+
+            # Sair e a unica escrita que qualquer logado faz. Declarada aqui
+            # de proposito: com o default virando NEGAR (Fase 2), rota sem
+            # regra passa a ser recusada, entao esta precisa existir.
+            (("POST",), "/api/auth/logout", "viewer"),
         ]
 
     def _is_public_path(self, path: str) -> bool:
@@ -238,6 +248,20 @@ class ApiAuthMiddleware(BaseHTTPMiddleware):
                 reset_current_tenant_slug(ctx_token)
 
         required_role = self._match_role_rule(path, method)
+        # FASE 2 -- default DENY para escrita. Antes, rota de escrita fora da
+        # lista de prefixos caia em "basta estar logado": nascia no nivel mais
+        # permissivo e ninguem percebia (eram 62 assim em 20/09/2026, entre
+        # elas abrir porta). Agora o silencio custa 403, nao acesso.
+        # Leitura segue no comportamento antigo de proposito: negar GET nao
+        # declarado quebraria tela sem ganho de seguranca equivalente.
+        if not required_role and method in self._WRITE_METHODS:
+            try:
+                return JSONResponse(
+                    status_code=403,
+                    content={"detail": "rota sem perfil declarado: acesso negado por padrao"},
+                )
+            finally:
+                reset_current_tenant_slug(ctx_token)
         if required_role and not self._role_allows(str(user.get("role") or ""), required_role):
             try:
                 return JSONResponse(
