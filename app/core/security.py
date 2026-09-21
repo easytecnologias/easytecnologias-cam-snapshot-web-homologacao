@@ -96,12 +96,49 @@ class ApiAuthMiddleware(BaseHTTPMiddleware):
             (("POST",), "/api/dvr/", "operator"),
             (("POST",), "/api/nvr/", "operator"),
             (("POST",), "/api/ia/", "operator"),
+            (("POST", "DELETE"), "/api/alert/members", "operator"),
+            (("POST",), "/api/alert/incidents", "operator"),
+
+            # --- Fase 1 da correcao de autorizacao (2026-09-20) ---------------
+            # Estas rotas de ESCRITA caiam no default "basta estar logado", que
+            # dava a um viewer poder de abrir porta, cadastrar pessoa com
+            # acesso, extrair gravacao e trocar o destino dos alertas.
+            # A ORDEM IMPORTA: _match_role_rule devolve a PRIMEIRA regra que
+            # casa, entao o que exige admin vem antes do prefixo generico.
+
+            # -- consequencia alta: exige admin --
+            (("DELETE",), "/api/access-control/devices", "admin"),
+            (("POST", "PUT", "DELETE"), "/api/access-control/whatsapp", "admin"),
+            (("POST",), "/api/system/bootstrap", "admin"),
+            (("DELETE", "PATCH"), "/api/auth/tenants/", "admin"),
+            (("POST",), "/api/auth/storage/migrate", "admin"),
+            (("PUT",), "/api/monitoring/telegram", "admin"),
+            (("POST",), "/api/monitoring/telegram/test", "admin"),
+
+            # -- operacao do dia a dia: exige operator --
+            # Controle de acesso: abrir porta, pessoas, grupos, regras, sync.
+            (("POST", "PUT", "PATCH", "DELETE"), "/api/access-control/", "operator"),
+            # Extrair gravacao e imagem e questao de privacidade.
+            (("POST",), "/api/playback/", "operator"),
+            (("POST", "PUT", "PATCH", "DELETE"), "/api/planning/", "operator"),
+            (("POST",), "/api/monitoring/", "operator"),
+            (("POST",), "/api/network/tools/", "operator"),
+            (("POST",), "/api/telegram/", "operator"),
+            (("POST",), "/api/cameras/", "operator"),
+            (("POST",), "/api/inventory/report/job", "operator"),
+            (("PATCH", "DELETE"), "/api/kmz/", "operator"),
+            (("PATCH",), "/api/windows/", "operator"),
+            (("DELETE",), "/api/olt/", "operator"),
         ]
 
     def _is_public_path(self, path: str) -> bool:
         if path in self._public_paths:
             return True
         if path.startswith("/api/connectors/agent/"):
+            return True
+        # App do botao de panico: autentica pelo token do aparelho dentro do
+        # proprio endpoint (app/api/endpoints/alert.py), nao por usuario.
+        if path.startswith("/api/alert/app/"):
             return True
         if path.startswith("/api/access-control/whatsapp/inbound/") and path != "/api/access-control/whatsapp/inbound/simulate":
             return True

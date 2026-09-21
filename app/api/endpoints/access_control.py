@@ -5,12 +5,13 @@ import json
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional
 
-from fastapi import APIRouter, File, Header, HTTPException, Query, Request, Response, UploadFile
+from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, Request, Response, UploadFile
 from pydantic import BaseModel, Field
 from starlette.responses import PlainTextResponse, StreamingResponse
 
 import logging
 
+from app.api.endpoints.auth import current_user
 from app.services.access_control_store import (
     access_control_summary,
     access_present_people,
@@ -725,13 +726,26 @@ def api_access_control_delete_device(device_id: str) -> Dict[str, Any]:
 
 
 @router.post("/devices/{device_id}/open-door")
-def api_access_control_open_door(device_id: str, channel: int = 1) -> Dict[str, Any]:
+def api_access_control_open_door(
+    device_id: str,
+    channel: int = 1,
+    user: Dict[str, Any] = Depends(current_user),
+) -> Dict[str, Any]:
+    """Abre a porta remotamente.
+
+    Exige usuario identificado: abrir porta e ato de seguranca fisica e tem de
+    ficar registrado com nome. Antes a rota nao recebia o usuario -- nem para
+    autorizar, nem para o log."""
     from app.services.access_control_store import get_device_with_password
 
     device = get_device_with_password(device_id)
     if not device:
         raise HTTPException(status_code=404, detail="Dispositivo nao encontrado neste cliente.")
     result = device_open_door(device, channel=channel)
+    logging.getLogger("cam-snapshot").info(
+        "abertura remota de porta: device=%s canal=%s por=%s (%s)",
+        device_id, channel, user.get("username"), user.get("role"),
+    )
     return {"ok": True, **result}
 
 
