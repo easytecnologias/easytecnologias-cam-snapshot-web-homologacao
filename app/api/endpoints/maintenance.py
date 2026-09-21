@@ -412,6 +412,20 @@ def _bool_ok(resp: requests.Response | None) -> bool:
     return resp.status_code in (200, 201, 202, 204)
 
 
+_TRANSITO_ISOLADO = ipaddress.ip_network("10.201.0.0/24")
+
+
+def _ip_em_transito_isolado(ip: str) -> bool:
+    """IP na faixa de transito dos tuneis isolados. Cada conector ocupa um /31
+    exclusivo dela, com rota propria pra sua wgc<N> -- entao o destino nunca
+    cai no roteador de outro cliente. A faixa compartilhada (10.250.0.0/24)
+    NAO entra aqui de proposito: la os IPs se repetem entre conectores."""
+    try:
+        return ipaddress.ip_address(str(ip or "").strip()) in _TRANSITO_ISOLADO
+    except ValueError:
+        return False
+
+
 def _connector_tunnel_ip_owner(ip: str) -> str:
     """Conector cujo PROPRIO MikroTik atende neste IP (o client_address do
     tunnel WireGuard, ex. 10.201.0.17/31). So olha conectores visiveis pro
@@ -427,14 +441,23 @@ def _connector_tunnel_ip_owner(ip: str) -> str:
             if addr.split("/")[0].strip() != alvo:
                 continue
             cid = str(row.get("id") or "").strip()
-            # EXIGE mapa vnat pro IP do roteador. Sem ele o pacote sai pela
-            # tabela de rota PADRAO, que manda 10.250.0.x pela wg-sightops
-            # (rede compartilhada) -- onde esse IP e de OUTRO roteador. Foi
-            # medido em producao: PORTO REAL caia na TELHA e MATA GRANDE na
-            # JAPARATINGA. Sem virtualizacao nao ha isolamento, entao recusa.
-            if not cid or (_vnat.virtual_ip_for(cid, alvo) or alvo) == alvo:
+            if not cid:
                 return ""
-            return cid
+            # So autoriza se o caminho ate o roteador for EXCLUSIVO do conector:
+            #
+            # 1) IP na faixa de transito isolado (10.201.0.0/24): cada conector
+            #    tem um /31 proprio com rota dedicada pra sua wgc<N> -- medido
+            #    com `ip route get`: .7->wgc3, .9->wgc4, .13->wgc6, etc.
+            # 2) ou IP virtualizado por vnat (NETMAP pra tabela do conector).
+            #
+            # Fora disso (ex. 10.250.0.x, da wg-sightops COMPARTILHADA) o pacote
+            # sai pela tabela padrao e cai no roteador de OUTRO cliente: medido
+            # em producao, PORTO REAL abria a TELHA e MATA GRANDE a JAPARATINGA.
+            if _ip_em_transito_isolado(alvo):
+                return cid
+            if (_vnat.virtual_ip_for(cid, alvo) or alvo) != alvo:
+                return cid
+            return ""
     except Exception:
         return ""
     return ""

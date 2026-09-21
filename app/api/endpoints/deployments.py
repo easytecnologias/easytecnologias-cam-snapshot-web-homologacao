@@ -22,6 +22,9 @@ from app.api.endpoints.nvr import _recorder_connector_for_host
 
 router = APIRouter(prefix="/api/deployments", tags=["deployments"])
 
+# marca ja detectada por gravador (base|usuario) -- evita um probe por acao
+_RECORDER_FAMILY_CACHE: Dict[str, str] = {}
+
 
 def _deployments_path() -> Path:
     return tenant_scoped_path("deployments.json")
@@ -148,6 +151,103 @@ def _set_config_url(base: str, params: Dict[str, Any]) -> str:
     return f"{base}/cgi-bin/configManager.cgi?action=setConfig&{urlencode(params)}"
 
 
+def _hik_input_proxy_xml(channel: int, camera_ip: str, camera_user: str, camera_password: str,
+                         title: str, manage_port: int, protocol: str) -> str:
+    """XML_InputProxyChannel (ISAPI 16.2.169) pra vincular uma camera a um canal.
+
+    adminProtocol: HIKVISION fala com camera Hikvision; ONVIF cobre as outras
+    marcas (Intelbras, por exemplo). managePortNo e a porta de GERENCIA -- 8000
+    no protocolo proprietario, 80 no ONVIF -- nao a porta web da camera."""
+    import xml.sax.saxutils as _x
+
+    def e(v: Any) -> str:
+        return _x.escape(str(v or ""))
+
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<InputProxyChannel version="2.0" xmlns="http://www.isapi.org/ver20/XMLSchema">'
+        f"<id>{int(channel)}</id>"
+        f"<name>{e(title)}</name>"
+        "<sourceInputPortDescriptor>"
+        f"<adminProtocol>{e(protocol)}</adminProtocol>"
+        "<addressingFormatType>ipaddress</addressingFormatType>"
+        f"<ipAddress>{e(camera_ip)}</ipAddress>"
+        f"<managePortNo>{int(manage_port)}</managePortNo>"
+        "<srcInputPort>1</srcInputPort>"
+        f"<userName>{e(camera_user)}</userName>"
+        f"<password>{e(camera_password)}</password>"
+        "<streamType>auto</streamType>"
+        "</sourceInputPortDescriptor>"
+        "</InputProxyChannel>"
+    )
+
+
+def _hik_request(method: str, url: str, user: str, password: str, body: str = "", timeout: float = 10.0) -> requests.Response:
+    """ISAPI aceita digest; algumas versoes antigas so basic -- tenta os dois."""
+    last_exc: Exception | None = None
+    last_resp: requests.Response | None = None
+    for auth in (HTTPDigestAuth(user, password), HTTPBasicAuth(user, password)):
+        try:
+            resp = requests.request(
+                method, url, auth=auth, timeout=timeout, verify=False,
+                data=body.encode("utf-8") if body else None,
+                headers={"Content-Type": "application/xml"} if body else None,
+            )
+            last_resp = resp
+            if resp.status_code not in (401, 403):
+                return resp
+        except Exception as exc:
+            last_exc = exc
+    if last_resp is not None:
+        return last_resp
+    if last_exc:
+        raise last_exc
+    raise RuntimeError("falha desconhecida")
+
+
+def _hik_response_ok(resp: requests.Response) -> bool:
+    if not (200 <= int(resp.status_code) < 300):
+        return False
+    corpo = (resp.text or "").lower()
+    # ISAPI devolve 200 mesmo recusando: quem decide e o statusCode do XML.
+    if "<statuscode>" in corpo:
+        return "<statuscode>1<" in corpo or "ok" in corpo
+    return True
+
+
+def _hik_add_camera(base: str, user: str, password: str, channel: int, camera_ip: str,
+                    camera_user: str, camera_password: str, title: str) -> tuple[bool, str]:
+    """Vincula a camera ao canal. Tenta o protocolo proprietario primeiro (camera
+    Hikvision) e cai pra ONVIF (outras marcas). Se o canal ja existe, o POST
+    recusa -- ai configura por PUT no canal."""
+    url_lista = f"{base}/ISAPI/ContentMgmt/InputProxy/channels"
+    url_canal = f"{url_lista}/{int(channel)}"
+    ultimo = ""
+    for protocolo, porta in (("HIKVISION", 8000), ("ONVIF", 80)):
+        corpo = _hik_input_proxy_xml(channel, camera_ip, camera_user, camera_password, title, porta, protocolo)
+        for metodo, url in (("PUT", url_canal), ("POST", url_lista)):
+            try:
+                resp = _hik_request(metodo, url, user, password, corpo)
+            except Exception as exc:
+                ultimo = f"{protocolo}/{metodo}: {exc}"
+                continue
+            if _hik_response_ok(resp):
+                return True, f"{protocolo} via {metodo}"
+            ultimo = f"{protocolo}/{metodo}: HTTP {resp.status_code} {(resp.text or '').strip()[:120]}"
+    return False, ultimo or "sem resposta do gravador"
+
+
+def _hik_remove_camera(base: str, user: str, password: str, channel: int) -> tuple[bool, str]:
+    """Solta o canal (ISAPI 15.2.8, DELETE)."""
+    try:
+        resp = _hik_request("DELETE", f"{base}/ISAPI/ContentMgmt/InputProxy/channels/{int(channel)}", user, password)
+    except Exception as exc:
+        return False, str(exc)
+    if _hik_response_ok(resp):
+        return True, "canal liberado"
+    return False, f"HTTP {resp.status_code} {(resp.text or '').strip()[:120]}"
+
+
 def _recorder_set_config(base: str, user: str, password: str, params: Dict[str, Any], timeout: float = 8.0) -> requests.Response:
     return _try_recorder_request(_set_config_url(base, params), user, password, timeout=timeout)
 
@@ -219,7 +319,97 @@ def _parse_remote_device_channels(text: str) -> Dict[int, Dict[str, str]]:
     return used
 
 
+def _recorder_family(base: str, user: str, password: str) -> str:
+    """"intelbras" (CGI) ou "hikvision" (ISAPI), perguntando ao proprio
+    gravador. O assistente so falava CGI; num Hikvision as etapas depois do
+    login (canais, snapshot, adicionar camera) caiam em silencio."""
+    chave = f"{base}|{user}"
+    cache = _RECORDER_FAMILY_CACHE.get(chave)
+    if cache:
+        return cache
+    familia = "intelbras"
+    try:
+        resp = _try_recorder_request(f"{base}/ISAPI/System/deviceInfo", user, password, timeout=4.0)
+        codigo = int(resp.status_code)
+        if 200 <= codigo < 300 and "deviceinfo" in (resp.text or "").lower():
+            familia = "hikvision"
+        elif codigo in (401, 403):
+            # A rota ISAPI existe e so pediu credencial -- num Intelbras ela
+            # nem existiria (404). Sem isso, senha errada fazia o gravador
+            # Hikvision ser tratado como Intelbras e as acoes falhavam mudas.
+            familia = "hikvision"
+    except Exception:
+        pass
+    # So memoriza deteccao feita COM credencial aceita; senao um erro de senha
+    # congelaria a marca pro resto da vida do processo.
+    if familia == "hikvision" or password:
+        _RECORDER_FAMILY_CACHE[chave] = familia
+    return familia
+
+
+def _fetch_hik_live_channels(base: str, user: str, password: str, total: int) -> Tuple[Dict[int, Dict[str, str]], bool]:
+    """Canais ocupados de um NVR Hikvision, pelo InputProxy (ISAPI).
+
+    Reaproveita os parsers ja usados no inventario de gravadores (nvr.py), que
+    tratam as variacoes de XML entre firmwares -- nao vale reescrever isso."""
+    from requests.auth import HTTPDigestAuth as _Digest
+
+    try:
+        from app.api.endpoints.nvr import (
+            _hik_get_text,
+            _parse_hik_channels,
+            _parse_hik_channel_ips,
+            _parse_hik_channel_models,
+        )
+    except Exception:
+        return {}, False
+
+    auth = _Digest(user, password)
+    xml = _hik_get_text(f"{base}/ISAPI/ContentMgmt/InputProxy/channels", auth, 6.0)
+    if not xml:
+        xml = _hik_get_text(f"{base}/ISAPI/System/Video/inputs/channels", auth, 6.0)
+    if not xml:
+        return {}, False
+
+    nomes = _parse_hik_channels(xml)
+    ips = _parse_hik_channel_ips(xml)
+    modelos = _parse_hik_channel_models(xml)
+
+    try:
+        teto = max(1, min(int(total or 32), 128))
+    except Exception:
+        teto = 32
+
+    used: Dict[int, Dict[str, str]] = {}
+    # Canal so conta como OCUPADO se tem camera atras (ip/modelo). Nome sozinho
+    # nao serve: o firmware ja vem com "Camera 01".."Camera 32" preenchidos, e
+    # ai o assistente mostraria o gravador inteiro como cheio.
+    for ch in sorted(set(nomes) | set(ips) | set(modelos)):
+        if not (1 <= ch <= teto):
+            continue
+        ip = str(ips.get(ch) or "").strip()
+        modelo = str(modelos.get(ch) or "").strip()
+        if not ip and not modelo:
+            continue
+        dados: Dict[str, str] = {}
+        if ip:
+            dados["camera_ip"] = ip
+        if modelo:
+            dados["model"] = modelo
+        titulo = str(nomes.get(ch) or "").strip()
+        if titulo:
+            dados["title"] = titulo
+        used[ch] = dados
+    return used, True
+
+
 def _fetch_recorder_live_channels(base: str, user: str, password: str, total: int) -> Tuple[Dict[int, Dict[str, str]], bool]:
+    if _recorder_family(base, user, password) == "hikvision":
+        return _fetch_hik_live_channels(base, user, password, total)
+    return _fetch_intelbras_live_channels(base, user, password, total)
+
+
+def _fetch_intelbras_live_channels(base: str, user: str, password: str, total: int) -> Tuple[Dict[int, Dict[str, str]], bool]:
     titles: Dict[int, str] = {}
     used: Dict[int, Dict[str, str]] = {}
     remote_success = False
@@ -276,9 +466,16 @@ def _capture_recorder_snapshots(
         return
     snap_dir = tenant_snapshot_dir("nvr")
     safe_host = re.sub(r"[^0-9A-Za-z_-]+", "_", host).strip("_") or "nvr"
+    hik = _recorder_family(base, user, password) == "hikvision"
 
     def capture(channel: int) -> tuple[int, str]:
-        url = f"{base}/cgi-bin/snapshot.cgi?channel={int(channel)}"
+        # Hikvision nao tem snapshot.cgi: a foto do canal sai pelo ISAPI, e o
+        # id do stream e canal*100+1 (canal 1 -> 101).
+        url = (
+            f"{base}/ISAPI/Streaming/channels/{int(channel) * 100 + 1}/picture"
+            if hik
+            else f"{base}/cgi-bin/snapshot.cgi?channel={int(channel)}"
+        )
         for auth in (HTTPDigestAuth(user, password), HTTPBasicAuth(user, password)):
             try:
                 resp = requests.get(url, auth=auth, timeout=(2.0, 6.0), stream=True, verify=False)
@@ -782,6 +979,41 @@ def api_deployments_recorder_add_camera(payload: Dict[str, Any]) -> Dict[str, An
         current_label = _text(current.get("title") or current.get("camera_ip") or f"canal {channel:02d}")
         raise HTTPException(status_code=409, detail=f"canal {channel:02d} ja esta ocupado: {current_label}")
 
+    # Hikvision nao fala configManager/RemoteDevice: o vinculo e pelo InputProxy.
+    if _recorder_family(base, user, password) == "hikvision":
+        ok, detalhe = _hik_add_camera(base, user, password, channel, camera_ip, camera_user, camera_password, title)
+        if not ok:
+            raise HTTPException(status_code=400, detail=f"nao consegui vincular a camera ao canal {channel:02d}: {detalhe}")
+        live_used_after, _ = _fetch_recorder_live_channels(base, user, password, total)
+        if channel not in live_used_after:
+            raise HTTPException(
+                status_code=400,
+                detail=f"o gravador aceitou o canal {channel:02d} ({detalhe}), mas ele nao aparece ocupado -- confira usuario/senha da camera",
+            )
+        # mesmo fechamento do fluxo Intelbras: sem isso o vinculo nao entra no
+        # inventario e a camera some do gravador na proxima tela.
+        camera_row = {
+            "ip": camera_ip,
+            "titulo": title,
+            "modelo": _text(payload.get("camera_model")),
+            "fabricante": _text(payload.get("camera_manufacturer")),
+            "mac": _norm_mac(payload.get("camera_mac")),
+            "local": _text(payload.get("site") or payload.get("local")),
+        }
+        recorder_link = _upsert_recorder_channel(payload, camera_row)
+        return {
+            "ok": True,
+            "source": source,
+            "host": host,
+            "channel": channel,
+            "camera_ip": camera_ip,
+            "title": title,
+            "confirmed": True,
+            "recorder_link": recorder_link,
+            "status": detalhe,
+            "channels": _recorder_channel_grid(source, host, total, live_used=live_used_after, live_authoritative=True),
+        }
+
     idx = channel - 1
     remote_common = {
         "Enable": "true",
@@ -837,6 +1069,73 @@ def api_deployments_recorder_add_camera(payload: Dict[str, Any]) -> Dict[str, An
         "confirmed": True,
         "recorder_link": recorder_link,
         "channels": _recorder_channel_grid(source, host, total, live_used=live_used_after, live_authoritative=True),
+    }
+
+
+@router.post("/recorder-remove-camera")
+def api_deployments_recorder_remove_camera(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Solta um canal do gravador.
+
+    O frontend ja chamava esta rota, mas ela nunca existiu no backend: o botao
+    "Excluir canal" respondia 404 em qualquer marca."""
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="payload invalido")
+    source = _text(payload.get("recorder_type")).lower()
+    if source not in ("nvr", "dvr"):
+        raise HTTPException(status_code=400, detail="tipo de gravador obrigatorio")
+    host = _text(payload.get("recorder_host") or payload.get("host"))
+    user = _text(payload.get("recorder_user") or payload.get("user") or "admin")
+    password = _text(payload.get("recorder_password") or payload.get("password"))
+    if not host or not user or not password:
+        raise HTTPException(status_code=400, detail="entre no gravador informando host, usuario e senha")
+    try:
+        channel = int(_text(payload.get("recorder_channel") or payload.get("channel")) or "0")
+    except Exception:
+        channel = 0
+    if not channel:
+        raise HTTPException(status_code=400, detail="selecione o canal a excluir")
+    try:
+        total = int(payload.get("recorder_channel_total") or payload.get("channel_total") or 32)
+    except Exception:
+        total = 32
+
+    connector_id = _text(payload.get("connector_id") or payload.get("remote_connector_id"))
+    reach_host = _reach_deploy_host(host, connector_id)
+    base = _recorder_base_url(reach_host, payload.get("recorder_http_port") or payload.get("http_port"))
+
+    if _recorder_family(base, user, password) == "hikvision":
+        ok, detalhe = _hik_remove_camera(base, user, password, channel)
+    else:
+        # Intelbras/Dahua nao apaga o slot: desliga o RemoteDevice do canal.
+        idx = channel - 1
+        ok, detalhe = False, ""
+        for prefix in (f"RemoteDevice[{idx}]", f"RemoteDevice.uuid:System_CONFIG_NETCAMERA_INFO_{idx}"):
+            try:
+                resp = _recorder_set_config(base, user, password, {f"{prefix}.Enable": "false"})
+            except Exception as exc:
+                detalhe = str(exc)
+                continue
+            if _recorder_config_ok(resp):
+                ok, detalhe = True, "canal desabilitado"
+                break
+            detalhe = f"HTTP {resp.status_code}: {(resp.text or '').strip()[:120]}"
+    if not ok:
+        raise HTTPException(status_code=400, detail=f"nao consegui excluir o canal {channel:02d}: {detalhe}")
+
+    live_used, autoritativo = _fetch_recorder_live_channels(base, user, password, total)
+    if autoritativo and channel in live_used:
+        raise HTTPException(
+            status_code=400,
+            detail=f"o gravador aceitou o comando ({detalhe}), mas o canal {channel:02d} continua ocupado",
+        )
+    return {
+        "ok": True,
+        "source": source,
+        "host": host,
+        "channel": channel,
+        "status": detalhe,
+        "channels": _recorder_channel_grid(source, host, total, live_used=live_used, live_authoritative=autoritativo),
+        "message": f"Canal {channel:02d} liberado.",
     }
 
 
