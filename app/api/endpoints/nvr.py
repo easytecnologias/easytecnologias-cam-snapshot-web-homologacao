@@ -226,6 +226,17 @@ def _reach_recorder(ip: str) -> str:
     return _vnat.virtual_ip_for(cid, ip) or ip
 
 
+def _reach_camera(ip: str, recorder_host: str = "") -> str:
+    """IP a conectar de fato numa camera atras do gravador. O conector vem do
+    request (scan) ou do proprio gravador: cameras da faixa isolada so respondem
+    no IP virtual (vnat), nunca no real."""
+    ip = str(ip or "").strip()
+    if not ip:
+        return ip
+    cid = _rec_req_connector.get() or _recorder_connector_for_host(recorder_host)
+    return _vnat.virtual_ip_for(cid, ip) or ip
+
+
 def _base(ip: str, port: int) -> str:
     ip = _reach_recorder(ip)  # conector isolado -> IP virtual (host NAT -> real)
     return f"http://{ip}:{int(port)}" if int(port) != 80 else f"http://{ip}"
@@ -2065,6 +2076,7 @@ def _hik_fetch_camera_mac(ip: str, user: str, password: str, timeout: float) -> 
         return ""
     auth = HTTPDigestAuth(user, password)
     urls = (
+        f"http://{cip}/ISAPI/System/deviceInfo",
         f"http://{cip}/ISAPI/System/Network/interfaces",
         f"http://{cip}/ISAPI/System/Network/interfaces/1",
         f"http://{cip}/ISAPI/System/Network",
@@ -3082,14 +3094,15 @@ def _api_dvr_scan_impl(req: DVRScanRequest) -> Dict[str, Any]:
         ipn = _norm_ip_text(cip)
         if not ipn:
             continue
+        reach = _reach_camera(ipn, ip)
         # Hikvision: tenta ler MAC direto da camera via ISAPI com as mesmas credenciais.
         if mode == "hik":
-            cmac = _hik_fetch_camera_mac(ipn, req.user, req.password, req.timeout_sec)
+            cmac = _hik_fetch_camera_mac(reach, req.user, req.password, req.timeout_sec)
             if cmac:
                 ch_macs[ch] = cmac
                 continue
         if ipn not in mac_cache:
-            mac_cache[ipn] = _arp_lookup_mac(ipn)
+            mac_cache[ipn] = _arp_lookup_mac(reach)
         if mac_cache[ipn]:
             ch_macs[ch] = mac_cache[ipn]
 
@@ -3262,7 +3275,8 @@ def api_dvr_snapshot_update(req: DVRSnapshotUpdateRequest) -> Dict[str, Any]:
     if not ch_macs.get(ch):
         cip = _norm_ip_text(ch_ips.get(ch) or "")
         if cip:
-            ch_macs[ch] = _hik_fetch_camera_mac(cip, req.user, req.password, req.timeout_sec) or _arp_lookup_mac(cip)
+            reach = _reach_camera(cip, ip)
+            ch_macs[ch] = _hik_fetch_camera_mac(reach, req.user, req.password, req.timeout_sec) or _arp_lookup_mac(reach)
 
     fname = f"{ip.replace('.', '_')}_{int(req.http_port)}_ch{ch:02d}.jpg"
     snap_url, snap_dark = _snapshot_for_channel(base, auth, req.timeout_sec, ch, fname)

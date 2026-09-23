@@ -7,6 +7,41 @@ resposta final do agente pro usuário. Entrada mais recente no topo.
 
 ---
 
+## 2026-09-23 — MAC das câmeras vazio nos Gravadores (causa: IP real em vez do vnat)
+
+Sintoma: coluna MAC CAMERA vazia em todos os 32 canais do DVR-01 (10.0.0.52,
+Hikvision DS-7732NXI, tenant mega-alarmes / UFV-RODOANEL). Modelo e serial vinham.
+
+Causa raiz: o NVR Hikvision **não** reporta MAC por canal — `InputProxy/channels`
+e `.../status` só trazem ipAddress/model/serialNumber (conferido no equipamento).
+O MAC só existe na própria câmera (`/ISAPI/System/deviceInfo` → `<macAddress>`),
+e `_hik_fetch_camera_mac()` era chamada com o **IP real** da câmera (10.0.0.17),
+que não é roteável do servidor. Como o conector `4fef0f33b137a51e` mapeia
+`10.0.0.0/23 -> 10.208.128.0/23`, a câmera responde em 10.208.128.17.
+Um patch anterior (só no container) tinha desistido do fallback quando o gravador
+era isolado, justamente porque o IP real dava timeout por canal.
+
+Correção (`app/api/endpoints/nvr.py`):
+- novo `_reach_camera(ip, recorder_host)` — mesma ideia do `_reach_recorder`, mas
+  para o IP da câmera: vira IP virtual quando há mapeamento vnat;
+- `_hik_fetch_camera_mac()` passa a tentar `/ISAPI/System/deviceInfo` primeiro;
+- o fallback de MAC no `/scan` e no `/snapshot/update` usa o IP alcançável, e só
+  é pulado quando a faixa **não** tem mapeamento vnat (aí sim o IP real é inútil).
+
+Provado: 16/16 câmeras distintas do 10.0.0.52 devolveram MAC pelo IP virtual.
+
+ATENÇÃO — divergência produção x git: o `nvr.py` de dentro do `sightops-v3-api`
+**não** é o do HEAD. O container tem patches que não estão no repo (fallback de
+senha do site no scan, `old_mac_map`, MAC do inventário de câmeras IP, preservação
+de site/connector no snapshot/update, dedup por host+canal) e o HEAD tem coisas que
+o container não tem (`register_connector_known_targets`, docstrings). Por isso a
+correção foi aplicada **cirurgicamente** no arquivo do container, não copiando o do
+repo. Backups: `/app/data/nvr.py.bak-macvnat-*` (dentro do container) e
+`/tmp/nvr_backup_20260923-085800.py` (host). A mesma correção está no working tree
+do repo. Reconciliar repo x container continua pendente.
+
+---
+
 ## 2026-09-16 — Migração RADS pro v3 CONCLUÍDA (4 conectores, rota antiga VIVA)
 
 **Todos os conectores RADS do prod migrados pro v3** (dual-tunnel, `sightops-wg` antiga viva — NÃO deletar
