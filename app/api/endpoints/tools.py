@@ -444,13 +444,35 @@ def _normalize_inventory_mode(mode: str = "") -> str:
     return "olt"
 
 
-def _load_rows_by_source(source: str, mode: str = "") -> list[dict[str, Any]]:
+def _load_rows_by_source_mode(source: str, mode: str = "") -> tuple[list[dict[str, Any]], str]:
+    """Linhas da fonte + o modo de onde elas vieram.
+
+    Cada site vive num modo so (o Demerval, por exemplo, so existe em "switch").
+    Com o seletor do mapa em outro modo o inventario vinha vazio e baixar/gerar
+    KMZ morria em "Inventario vazio." mesmo com as cameras cadastradas. Aqui o
+    modo pedido tem prioridade e os outros servem de reserva; quem grava usa o
+    modo EFETIVO, pra nao criar copia da camera num modo que nao e o dela.
+    """
     src = str(source or "ip").strip().lower()
     if src == "dvr":
-        return _load_dvr_rows()
+        return _load_dvr_rows(), ""
     if src == "nvr":
-        return _load_nvr_rows()
-    return _load_inventory_rows(mode=_normalize_inventory_mode(mode))
+        return _load_nvr_rows(), ""
+    wanted = _normalize_inventory_mode(mode)
+    rows = _load_inventory_rows(mode=wanted)
+    if rows:
+        return rows, wanted
+    for alt in ("basico", "switch", "olt"):
+        if alt == wanted:
+            continue
+        rows = _load_inventory_rows(mode=alt)
+        if rows:
+            return rows, alt
+    return [], wanted
+
+
+def _load_rows_by_source(source: str, mode: str = "") -> list[dict[str, Any]]:
+    return _load_rows_by_source_mode(source, mode=mode)[0]
 
 
 def _save_rows_by_source(source: str, rows: list[dict[str, Any]], mode: str = "") -> None:
@@ -951,7 +973,7 @@ async def api_inventory_report_pdf(site: str = "", company_name: str = "", repor
         include_photos=True,
         **cfg,
     )
-    return FileResponse(path=pdf_path, media_type="application/pdf", filename=pdf_path.name)
+    return FileResponse(path=pdf_path, media_type="application/pdf", filename=pdf_path.name, headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"})
 
 
 # Job assincrono com progresso: gerar o PDF (principalmente a galeria de
@@ -1070,7 +1092,7 @@ async def api_inventory_report_preview(site: str = "", company_name: str = "", r
 async def api_inventory_report_preview_jpg(site: str = "", company_name: str = "", report_color: str = "", mode: str = "", ips: str = "") -> FileResponse:
     rows, cfg = _load_report_rows_and_config(site, company_name, report_color, mode, ips)
     img_path = build_inventory_preview_image(rows, **cfg)
-    return FileResponse(path=img_path, media_type="image/jpeg", filename=img_path.name)
+    return FileResponse(path=img_path, media_type="image/jpeg", filename=img_path.name, headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"})
 
 
 @router.get("/inventory/report/settings")
@@ -1594,7 +1616,7 @@ async def api_kmz_import_locations_apply(payload: Dict[str, Any]) -> Dict[str, A
     if not geojson:
         raise HTTPException(400, "Nenhum KMZ importado/convertido para aplicar.")
 
-    rows = _load_rows_by_source(source, mode=mode)
+    rows, effective_mode = _load_rows_by_source_mode(source, mode=mode)
     if not rows:
         raise HTTPException(400, "Inventario vazio.")
 
@@ -1647,7 +1669,8 @@ async def api_kmz_import_locations_apply(payload: Dict[str, Any]) -> Dict[str, A
                     rows_out[raw_idx]["lon"] = m.get("lon")
             _save_rows_by_source(source, rows_out)
         else:
-            _save_rows_by_source(source, new_rows, mode=mode)
+            # modo EFETIVO: se as cameras vieram de outro modo, e nele que salva
+            _save_rows_by_source(source, new_rows, mode=effective_mode or mode)
 
     report_path = tenant_locations_apply_report_path() if get_current_tenant_slug() else (DATA_DIR / "input" / "locations_apply_report.json")
     report_path.parent.mkdir(parents=True, exist_ok=True)

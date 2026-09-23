@@ -2589,7 +2589,7 @@ def api_nvr_report_preview_jpg(site: str = "", company_name: str = "") -> FileRe
         include_olt=False,
         module_label="NVR",
     )
-    return FileResponse(path=img_path, media_type="image/jpeg", filename=img_path.name)
+    return FileResponse(path=img_path, media_type="image/jpeg", filename=img_path.name, headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"})
 
 
 @router.get("/report.pdf")
@@ -2611,7 +2611,7 @@ def api_nvr_report_pdf(site: str = "", company_name: str = "", mode: str = "", i
         recorder_type="nvr",
         module_label="Gravadores NVR",
     )
-    return FileResponse(path=pdf_path, media_type="application/pdf", filename=pdf_path.name)
+    return FileResponse(path=pdf_path, media_type="application/pdf", filename=pdf_path.name, headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"})
 
 
 @router.post("/channel/rename")

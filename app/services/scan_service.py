@@ -24,6 +24,7 @@ from app.services.photo_store import (
     snapshot_storage_dir,
 )
 from app.services.db_store import load_app_settings, load_olt_cpe_state, load_switch_mac_state
+from app.services import connector_routing_vnat as _vnat
 
 DVR_SNAPSHOT_NAME_RE = re.compile(r"^\d{1,3}(?:_\d{1,3}){3}_\d+_ch\d+\.jpg$", re.IGNORECASE)
 
@@ -514,9 +515,22 @@ def _upload_imgbb_for_inventory(
         if "/dvr_snapshot/" in p_norm:
             continue
 
-        # Isola o fluxo IP: só aceita snapshot canônico derivado do IP.
-        expected_name = snapshot_filename_from_ip(ip)
-        if p.name.lower() != expected_name.lower():
+        # Isola o fluxo IP: só aceita snapshot canônico derivado do IP. Em
+        # conector isolado a captura fala com a câmera pelo IP VIRTUAL (vnat) e
+        # grava o arquivo com esse nome (10_210_66_51.jpg), enquanto o
+        # inventário guarda o IP real (192.168.18.51) -- por isso o nome do
+        # virtual também vale, senão nenhuma foto de cliente isolado subia
+        # ("Nenhum snapshot local encontrado para upload").
+        expected = {snapshot_filename_from_ip(ip).lower()}
+        cid = str(cam.get("remote_connector_id") or cam.get("connector_id") or "").strip()
+        if cid:
+            try:
+                virt = _vnat.virtual_ip_for(cid, ip)
+            except Exception:
+                virt = ""
+            if virt:
+                expected.add(snapshot_filename_from_ip(virt).lower())
+        if p.name.lower() not in expected:
             continue
 
         paths.append(p)

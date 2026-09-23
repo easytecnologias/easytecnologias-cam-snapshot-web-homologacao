@@ -384,14 +384,23 @@ function mapLayerOverlapsImported(layer, importedPointSets) {
 
 async function mapLoadCameraIndex() {
   const mode = mapInventoryMode();
-  const camData = await apiJson(`/api/cameras?mode=${encodeURIComponent(mode)}&_=${Date.now()}`);
-  const cams = camData?.cameras || [];
+  // O modo escolhido tem prioridade, mas os outros completam o que falta: cada
+  // site vive num modo so (Demerval esta em "switch", por exemplo), e antes o
+  // mapa com o seletor em "Basico" dizia "sem inventario neste modo" e nao
+  // casava ponto nenhum -- mesmo com a camera cadastrada em outro modo.
+  const modes = [mode, ...['basico', 'switch', 'olt'].filter(m => m !== mode)];
   const byName = {};
   const byIp = {};
-  cams.forEach(c => {
-    if (c.titulo) byName[String(c.titulo).toLowerCase()] = c;
-    if (c.ip) byIp[String(c.ip)] = c;
-  });
+  for (const m of modes) {
+    const camData = await apiJson(`/api/cameras?mode=${encodeURIComponent(m)}&_=${Date.now()}`)
+      .catch(() => null);
+    (camData?.cameras || []).forEach(c => {
+      const name = String(c.titulo || '').toLowerCase();
+      if (name && !byName[name]) byName[name] = c;       // primeiro modo ganha
+      const ip = String(c.ip || '');
+      if (ip && !byIp[ip]) byIp[ip] = c;
+    });
+  }
   _mapCameraIndex = { byName, byIp };
   return _mapCameraIndex;
 }

@@ -1037,6 +1037,10 @@ async function runNvrReport(button) {
     const site = document.getElementById('filterNvrLocal')?.value || '';
     if (site) params.set('site', site);
     params.set('items', items.map(x => `${x.host}|${x.channel}`).join(','));
+    // URL sempre inedita: a rota termina em .pdf e o Cloudflare trata isso como
+    // estatico -- com a mesma URL ele devolve o relatorio ANTIGO do cache e a
+    // requisicao nem chega no servidor.
+    params.set('_', String(Date.now()));
     const endpoint = _recType === 'dvr' ? '/api/dvr/report.pdf' : '/api/nvr/report.pdf';
     showToast('Gerando relatorio de gravadores...');
     const res = await api(`${endpoint}?${params.toString()}`);

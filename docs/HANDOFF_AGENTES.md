@@ -30,6 +30,129 @@ Correção (`app/api/endpoints/nvr.py`):
 
 Provado: 16/16 câmeras distintas do 10.0.0.52 devolveram MAC pelo IP virtual.
 
+### Mesmo dia — relatório de gravadores saía como FOTO (PDF sem texto)
+
+Sintoma: o PDF do botão de relatório dos Gravadores vinha como uma imagem por
+página (nada selecionável, mojibake `Â·`, página quase toda vazia). Comparação
+feita com os dois PDFs que o usuário separou em `Área de Trabalho/PROJETO`:
+`CERTO.pdf` (14/09, producer ReportLab, texto real) x `ERRADO.pdf` (23/09,
+1 imagem por página, sem producer).
+
+Causa: `app/services/recorder_pdf_report.py` (renderização vetorial em ReportLab,
+que substituiu a montagem antiga em PIL) **nunca foi deployado no v3**. O
+container não tinha o arquivo e `nvr.py`/`dvr.py` de lá importavam
+`build_recorder_pdf_report` do `pdf_inventory_report` — a versão PIL, que desenha
+a página com `draw.text()` e vira imagem.
+
+Feito: copiado `recorder_pdf_report.py` para o container e trocado o import nos
+dois endpoints (`nvr.py`, `dvr.py`) para o módulo novo. Backups em
+`/app/data/{nvr,dvr}.py.bak-relatorio-20260923`. Nada mudou no repo — o código
+correto já estava commitado; era só deploy.
+
+Provado: relatório gerado dentro do container saiu com producer ReportLab e
+1838/2571/1108 caracteres de texto nas 3 páginas (o antigo tinha 0).
+
+### Mesmo dia — e por que ele continuava vendo o PDF velho: CACHE DO CLOUDFLARE
+
+Depois do deploy acima o usuário gerou de novo e recebeu o MESMO PDF de foto.
+Prova de que a requisição não chegou no servidor: nenhum arquivo novo apareceu
+em `/app/data/reports` (o último era o de 10:12, anterior ao deploy).
+
+Causa: a rota é `/api/nvr/report.pdf` — **termina em `.pdf`**, extensão que o
+Cloudflare trata como estático. No nginx do v3 as locations `/v2/` e `/v3/`
+mandam `no-store`, mas `location /` (que atende `/api/`) não manda nada, e o
+`FileResponse` do FastAPI também não. Sem `Cache-Control` o CF aplica o TTL
+padrão dele: mesma URL (mode+site+items iguais) = PDF antigo servido do edge.
+
+Corrigido nas duas pontas:
+- backend: `Cache-Control: no-store` nas respostas de relatório/preview —
+  `nvr.py`, `dvr.py`, `tools.py` (inventário), `windows.py` e `planning.py`
+  (o documento de rede e o export KMZ tinham o mesmo problema);
+- frontend: `params.set('_', Date.now())` na URL do relatório de gravadores, para
+  a URL nunca repetir.
+
+Deployado no v3: os 5 endpoints no container (backups
+`/app/data/<arquivo>.py.bak-nostore-20260923`) e o frontend em
+`/home/central/sightops-v3-release/frontend` (backups em `/home/central/`),
+com a versão do asset do `recorders.js` bumpada para `v=1790172000` — número
+inédito, senão o próprio CF serve o JS velho junto com o HTML novo.
+
+### Mesmo dia — mapa não casava os pontos do projeto com o inventário
+
+Pedido: no mapa do tenant `mega-alarmes`, camada do projeto UFV - DEMERVAL LOBAO
+(19 pontos), os pontos apareciam sem inventário ("0 online / 0 offline" e o aviso
+vermelho "Sem inventario neste modo").
+
+Como o mapa casa (`frontend/js/cameras.js`, `mapFindCamera`): pelo **nome exato**
+do ponto (case-insensitive) OU pelo IP achado na descrição do ponto. Duas coisas
+quebravam:
+1. os pontos vêm do planejamento com nome numerado ("07 - Camera P 07") e o
+   inventário de câmeras IP tinha "CAMERA P 07" — não casava por nome, e a
+   descrição do KMZ não tem IP;
+2. `mapLoadCameraIndex()` só olhava o modo do seletor. O inventário do Demerval
+   existe **apenas no modo `switch`** (basico e olt têm 0 câmeras nesse tenant),
+   então com o seletor em "Basico" o índice vinha vazio.
+
+Feito:
+- títulos do inventário de câmeras IP (modo switch, site UFV-DEMERVAL-LOBAO)
+  renomeados para o nome do projeto, casando **por IP** (19 linhas). Nada foi
+  alterado na câmera física — só o título do inventário. Backup:
+  `/app/data/tenants/mega-alarmes/cam-inventory-switch.json.bak-titulos-20260923`.
+  De passagem: o IP .80 (que é o NVR) estava com o título "CAMERA P 01", igual ao
+  da câmera .51; agora é "RACK PRINCIPAL";
+- `mapLoadCameraIndex()` passou a montar o índice com o modo escolhido em
+  primeiro lugar e os outros completando o que falta, então o mapa acha a câmera
+  independente do modo do seletor. Deployado no frontend do v3 com
+  `cameras.js?v=1790172600`.
+
+Provado: simulando o casamento do mapa, 19/19 pontos acham a câmera no modo
+switch (antes: 0/19 em basico e olt).
+
+Fora do projeto e não tocados: `192.168.18.100` (CAMERA P 13), `.79` (IPdome),
+`.221`, `.231` — existem no inventário mas não têm ponto no projeto.
+
+### Mesmo dia — ImgBB: "Nenhum snapshot local encontrado" em cliente isolado
+
+Sintoma: enviar fotos ao ImgBB no inventário de Câmeras IP do Demerval acusava
+"21 sem snapshot local, 0 falharam" — mesmo com os JPGs no disco.
+
+Causa (`app/services/scan_service.py`, `_upload_imgbb_for_inventory`): havia um
+guard que só aceitava o arquivo cujo nome fosse o canônico derivado do IP da
+linha (`snapshot_filename_from_ip`). Em conector isolado a captura fala com a
+câmera pelo **IP virtual** (vnat) e grava `10_210_66_51.jpg`, enquanto o
+inventário guarda o IP real `192.168.18.51` → nome esperado
+`192_168_18_51.jpg` → **todas** as fotos eram descartadas. `resolve_snapshot_file`
+achava o arquivo certo pelo `snapshot_path`; era o guard seguinte que barrava.
+Ou seja, nenhum cliente atrás de conector isolado conseguia subir foto ao ImgBB.
+
+Correção: o conjunto de nomes aceitos passa a incluir o derivado do IP virtual
+do conector daquela linha (`_vnat.virtual_ip_for(connector_id, ip)`). O
+isolamento do fluxo IP continua (não aceita nome arbitrário nem dvr_snapshot).
+
+Provado: rodando a mesma seleção do upload no container, 17 fotos são aceitas
+(antes 0). As 6 restantes (.52, .54, .78, .79, .221, .231) realmente não têm
+arquivo — falta capturar snapshot delas.
+
+Deployado no container (backup `/app/data/scan_service.py.bak-imgbbvnat-20260923`).
+
+### Mesmo dia — baixar/gerar KMZ dizia "Inventario vazio."
+
+Mesma raiz do índice do mapa, agora no backend: `_load_rows_by_source()`
+(`app/api/endpoints/tools.py`) lia só o modo do seletor. Com o seletor em
+"Basico" e as câmeras do site cadastradas em "switch", as três rotas de KMZ
+(baixar camada enriquecida, aplicar coordenadas ao inventário e gerar KMZ)
+morriam em `HTTPException(400, "Inventario vazio.")`.
+
+Correção: novo `_load_rows_by_source_mode()` devolve as linhas **e o modo
+efetivo** — o modo pedido tem prioridade, os outros servem de reserva.
+Importante: a rota que *grava* (aplicar coordenadas) passou a salvar no modo
+efetivo, senão criaria uma cópia da câmera num modo que não é o dela.
+
+Provado no container: com o seletor em basico/olt/switch, as três formas passam
+a enxergar 39 linhas (23 do Demerval); antes basico e olt davam 0.
+
+Deployado (backup `/app/data/tools.py.bak-kmzmodo-20260923`).
+
 ATENÇÃO — divergência produção x git: o `nvr.py` de dentro do `sightops-v3-api`
 **não** é o do HEAD. O container tem patches que não estão no repo (fallback de
 senha do site no scan, `old_mac_map`, MAC do inventário de câmeras IP, preservação

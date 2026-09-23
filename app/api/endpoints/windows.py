@@ -113,7 +113,7 @@ def api_windows_enrich_photos() -> Dict[str, Any]:
 def api_windows_report_pdf(company_name: str = "") -> FileResponse:
     rows = load_windows_inventory()
     pdf_path = build_windows_inventory_pdf(rows, company_name=company_name)
-    return FileResponse(path=pdf_path, media_type="application/pdf", filename=pdf_path.name)
+    return FileResponse(path=pdf_path, media_type="application/pdf", filename=pdf_path.name, headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"})
 
 
 @router.get("/prepare-script")

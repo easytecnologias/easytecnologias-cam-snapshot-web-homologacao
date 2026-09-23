@@ -54,7 +54,12 @@ def projects_export_kmz(project_id: int) -> Response:
         return Response(
             content=content,
             media_type="application/vnd.google-earth.kmz",
-            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"',
+                # Sem no-store o Cloudflare cacheia o download (a URL termina em
+                # .pdf/.kmz) e o usuario baixa de novo o arquivo ANTIGO.
+                "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            },
         )
     except Exception as exc:
         raise _handle_error(exc) from exc
@@ -84,7 +89,12 @@ def projects_network_document(
         return Response(
             content=content,
             media_type="application/pdf",
-            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"',
+                # Sem no-store o Cloudflare cacheia o download (a URL termina em
+                # .pdf/.kmz) e o usuario baixa de novo o arquivo ANTIGO.
+                "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            },
         )
     except Exception as exc:
         raise _handle_error(exc) from exc
